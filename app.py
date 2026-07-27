@@ -32,6 +32,11 @@ def _num(v):
     return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
 
 
+def _s(v):
+    """Como _num pero para campos de texto (evita NaN suelto e invalido en el JSON)."""
+    return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+
 def construir_arbol(df, codigo, nombre):
     """Construye el árbol jerárquico del escandallo a partir de la columna Ruta,
     con el coste acumulado (rollup) en cada nodo (fase/subconjunto)."""
@@ -45,12 +50,12 @@ def construir_arbol(df, codigo, nombre):
         # fila del propio articulo (compra directa): el root ES la hoja
         if segs == [codigo]:
             root["coste"] = _num(r["Coste"]) or 0.0
-            root["cant"] = _num(r["Cant"]); root["unidad"] = r["Unidad"]
-            root["tipo"] = r["TipoCompra"]
+            root["cant"] = _num(r["Cant"]); root["unidad"] = _s(r["Unidad"])
+            root["tipo"] = _s(r["TipoCompra"])
             continue
         nodo = {"id": r["IdArticulo"], "nombre": r["Componente"],
-                "cant": _num(r["Cant"]), "unidad": r["Unidad"],
-                "tipo": r["TipoCompra"], "precio": _num(r["PrecioCompra"]),
+                "cant": _num(r["Cant"]), "unidad": _s(r["Unidad"]),
+                "tipo": _s(r["TipoCompra"]), "precio": _num(r["PrecioCompra"]),
                 "de_conjunto": int(r.get("DeConjunto", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
