@@ -9,6 +9,7 @@ import io
 import math
 
 import pandas as pd
+from openpyxl.styles import PatternFill
 from flask import Flask, request, jsonify, send_file, render_template
 
 from desglose import buscar_articulos, desglose, nombre_articulo, exportar_excel
@@ -109,6 +110,112 @@ def api_excel():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=f"desglose_{codigo}.xlsx",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flujo por LOTE: subir un Excel con IDs -> Excel con el coste total de cada uno
+# ---------------------------------------------------------------------------
+
+def extraer_ids(file):
+    """Extrae los IDs de artículo de un Excel subido. Busca una columna que
+    se llame algo tipo 'articulo'/'codigo'/'id'; si no, usa la primera columna."""
+    df = pd.read_excel(file, dtype=str)
+    objetivo = None
+    for col in df.columns:
+        cl = str(col).strip().lower()
+        if "articulo" in cl or "codigo" in cl or "código" in cl or cl in ("id", "ref", "referencia"):
+            objetivo = col
+            break
+    if objetivo is None:
+        objetivo = df.columns[0]
+
+    ids, vistos = [], set()
+    for v in df[objetivo].dropna().tolist():
+        s = str(v).strip()
+        if s.endswith(".0"):
+            s = s[:-2]                       # números leídos como 1234.0
+        if s.isdigit() and len(s) < 8:
+            s = s.zfill(8)                   # códigos ERP de 8 dígitos con ceros
+        if s and s not in vistos:
+            vistos.add(s)
+            ids.append(s)
+    return ids
+
+
+def resumen_lote(codigo):
+    """Coste total de un artículo + datos faltantes (sin tipo / sin precio)."""
+    df = desglose(codigo)
+    nombre = nombre_articulo(codigo)
+    if df.empty:
+        fila = {"IdArticulo": codigo, "Descripcion": nombre, "CosteTotal": None,
+                "Sin tipo": 0, "Sin precio": 0, "Estado": "No encontrado / sin datos"}
+        return fila, []
+
+    total = round(float(df["Coste"].sum()), 4)
+    padres = set(df["Articulo"])
+    hojas = df[~df["IdArticulo"].isin(padres)]
+    sin_tipo = hojas[hojas["TipoCompra"].isna()].drop_duplicates("IdArticulo")
+    sin_precio = df[df["SinPrecio"] == 1].drop_duplicates("IdArticulo")
+
+    faltantes = []
+    for r in sin_tipo.to_dict(orient="records"):
+        faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
+                          "Descripcion": r["Componente"], "Motivo": "Sin tipo de aprovisionamiento"})
+    for r in sin_precio.to_dict(orient="records"):
+        faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
+                          "Descripcion": r["Componente"], "Motivo": "Sin precio de compra"})
+
+    n_sin_tipo, n_sin_precio = len(sin_tipo), len(sin_precio)
+    fila = {"IdArticulo": codigo, "Descripcion": nombre, "CosteTotal": total,
+            "Sin tipo": n_sin_tipo, "Sin precio": n_sin_precio,
+            "Estado": "OK" if (n_sin_tipo + n_sin_precio) == 0 else "Incompleto"}
+    return fila, faltantes
+
+
+@app.route("/lote", methods=["GET", "POST"])
+def lote():
+    if request.method == "GET":
+        return render_template("lote.html")
+
+    file = request.files.get("archivo")
+    if not file or not file.filename:
+        return "Sube un archivo Excel (.xlsx)", 400
+    try:
+        ids = extraer_ids(file)
+    except Exception as ex:
+        return f"No se pudo leer el Excel: {ex}", 400
+    if not ids:
+        return "No se encontraron IDs de artículo en el Excel", 400
+
+    costes, faltantes = [], []
+    for cod in ids[:2000]:                   # tope de seguridad
+        fila, falt = resumen_lote(cod)
+        costes.append(fila)
+        faltantes.extend(falt)
+
+    df_costes = pd.DataFrame(costes)
+    df_falt = pd.DataFrame(faltantes) if faltantes else \
+        pd.DataFrame([{"Articulo": "", "IdComponente": "", "Descripcion": "", "Motivo": "(sin faltantes)"}])
+
+    buf = io.BytesIO()
+    rojo = PatternFill("solid", fgColor="FFC7CE")
+    with pd.ExcelWriter(buf, engine="openpyxl") as xls:
+        df_costes.to_excel(xls, sheet_name="Costes", index=False)
+        df_falt.to_excel(xls, sheet_name="Faltantes", index=False)
+        # resaltar en rojo los artículos incompletos / no encontrados
+        ws = xls.sheets["Costes"]
+        ncols = len(df_costes.columns)
+        for pos, estado in enumerate(df_costes["Estado"].tolist()):
+            if estado != "OK":
+                for c in range(1, ncols + 1):
+                    ws.cell(row=pos + 2, column=c).fill = rojo
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="costes_lote.xlsx",
     )
 
 
