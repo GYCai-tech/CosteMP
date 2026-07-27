@@ -1,0 +1,10 @@
+services:
+  costemp:
+    build: .
+    image: costemp
+    container_name: costemp
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env          # copia .env.example a .env con tus credenciales
+    restart: unless-stopped
