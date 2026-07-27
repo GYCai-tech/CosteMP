@@ -145,10 +145,14 @@ SELECT
     -- comprable (con tipo) pero SIN precio de compra (hueco de coste)
     CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NULL
          THEN 1 ELSE 0 END AS SinPrecio,
-    -- 1 si es una hoja que NO tiene escandallo propio pero es componente de un
-    -- conjunto (Articulos_Conjuntos): su coste viene por el conjunto, no aqui.
-    CASE WHEN m.EsHoja = 1 AND EXISTS (SELECT 1 FROM dbo.Articulos_Conjuntos ac
-                                       WHERE ac.IdArticulo = m.IdArticulo)
+    -- 1 si es una PIEZA FABRICADA (tiene fases) sin escandallo activo para
+    -- costearla, sin valorar, y que es componente de un conjunto: su coste viene
+    -- por el conjunto, no aqui. (NO marca tornilleria/compras que solo aparecen
+    -- en conjuntos: esas se costean o son sin-precio/sin-tipo normales.)
+    CASE WHEN m.EsHoja = 1
+              AND NOT (art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NOT NULL)
+              AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fss WHERE fss.IdArticulo = m.IdArticulo)
+              AND EXISTS (SELECT 1 FROM dbo.Articulos_Conjuntos ac WHERE ac.IdArticulo = m.IdArticulo)
          THEN 1 ELSE 0 END AS DeConjunto,
     m.Ruta AS Ruta                                 -- ruta jerarquica para el arbol
 FROM marcado m
