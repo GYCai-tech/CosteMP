@@ -145,6 +145,11 @@ SELECT
     -- comprable (con tipo) pero SIN precio de compra (hueco de coste)
     CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NULL
          THEN 1 ELSE 0 END AS SinPrecio,
+    -- 1 si es una hoja que NO tiene escandallo propio pero es componente de un
+    -- conjunto (Articulos_Conjuntos): su coste viene por el conjunto, no aqui.
+    CASE WHEN m.EsHoja = 1 AND EXISTS (SELECT 1 FROM dbo.Articulos_Conjuntos ac
+                                       WHERE ac.IdArticulo = m.IdArticulo)
+         THEN 1 ELSE 0 END AS DeConjunto,
     m.Ruta AS Ruta                                 -- ruta jerarquica para el arbol
 FROM marcado m
 LEFT JOIN dbo.Articulos  art ON art.IdArticulo = m.IdArticulo
@@ -245,7 +250,7 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     coste_merc = round(float(val.loc[val["TipoCompra"] == "MERCADERIA", "Coste"].sum()), 4)
     coste_otros = round(coste_total - coste_mp - coste_merc, 4)
 
-    df_vis = df.drop(columns=["SinPrecio", "Ruta"], errors="ignore")  # auxiliares, no se muestran
+    df_vis = df.drop(columns=["SinPrecio", "Ruta", "DeConjunto"], errors="ignore")  # auxiliares
     comprados = articulos_comprados(df)
     comprados_vis = comprados.drop(columns=["SinPrecio"])
 

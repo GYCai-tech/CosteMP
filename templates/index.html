@@ -40,6 +40,9 @@
   tr.mp td { background: #fef3c7; }
   tr.sinprecio td { background: #fde0e0; }
   tr.sinprecio td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
+  tr.conjunto td { background: #ede9fe; }
+  tr.conjunto td:first-child { box-shadow: inset 3px 0 0 #7c3aed; }
+  .badge-c { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #ede9fe; color: #6d28d9; }
   .arrow { display: inline-block; width: 12px; color: #999; font-size: 11px; }
   .arrow.leaf { color: transparent; }
 
@@ -134,7 +137,7 @@ async function cargar(codigo, desc) {
 
   // aplanar el arbol en filas (orden pre-order) con profundidad y parentesco
   rows = []; byId = {}; collapsed.clear();
-  const holes = {};
+  const holes = {}, deConj = {};
   let idc = 0;
   (function flat(nodes, depth, parent) {
     for (const n of nodes) {
@@ -142,9 +145,10 @@ async function cargar(codigo, desc) {
       const kids = n.hijos && n.hijos.length;
       rows.push(byId[id] = { _id: id, _parent: parent, _depth: depth, _kids: !!kids, n });
       if (kids) { collapsed.add(id); flat(n.hijos, depth + 1, id); }   // arranca plegado
-      else if (!(n.coste_total > 0) || !n.tipo) {                      // hoja sin coste/sin tipo
-        const h = holes[n.id] || (holes[n.id] = { id: n.id, nombre: n.nombre, tipo: n.tipo, rowId: id, veces: 0 });
-        h.veces++;
+      else if (n.de_conjunto) {                                        // hoja que viene de un conjunto
+        (deConj[n.id] || (deConj[n.id] = { id: n.id, nombre: n.nombre, rowId: id, veces: 0 })).veces++;
+      } else if (!(n.coste_total > 0) || !n.tipo) {                    // hoja sin coste/sin tipo
+        (holes[n.id] || (holes[n.id] = { id: n.id, nombre: n.nombre, tipo: n.tipo, rowId: id, veces: 0 })).veces++;
       }
     }
   })(data.arbol.hijos.length ? data.arbol.hijos : [data.arbol], 0, null);
@@ -152,17 +156,22 @@ async function cargar(codigo, desc) {
   tbody.innerHTML = rows.map(renderRow).join('');
   tbl.classList.add('show'); tools.classList.add('show');
   refresh();
-  renderAlert(Object.values(holes));
+  renderAlert(Object.values(holes), Object.values(deConj));
 }
 
-function renderAlert(items) {
+function renderAlert(holes, deConj) {
   const el = document.getElementById('alert');
-  if (!items.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
-  el.innerHTML = '<h3>⚠ Sin coste · ' + items.length + ' artículos</h3>'
-    + items.map(x => `<div class="it" data-row="${x.rowId}">
-        <span class="c">${x.id}</span> <span class="b">${x.tipo ? 'sin precio' : 'sin tipo'}</span>
-        ${x.veces > 1 ? '<span class="b" style="background:#f3f4f6;color:#666">×' + x.veces + '</span>' : ''}
-        <div class="d">${esc(x.nombre || '')}</div></div>`).join('');
+  if (!holes.length && !deConj.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  const item = (x, badge) => `<div class="it" data-row="${x.rowId}">
+      <span class="c">${x.id}</span> ${badge}
+      ${x.veces > 1 ? '<span class="b" style="background:#f3f4f6;color:#666">×' + x.veces + '</span>' : ''}
+      <div class="d">${esc(x.nombre || '')}</div></div>`;
+  let html = '';
+  if (holes.length) html += '<h3>⚠ Sin coste · ' + holes.length + '</h3>'
+    + holes.map(x => item(x, `<span class="b">${x.tipo ? 'sin precio' : 'sin tipo'}</span>`)).join('');
+  if (deConj.length) html += '<h3 style="color:#6d28d9;margin-top:14px">◆ De conjunto · ' + deConj.length + '</h3>'
+    + deConj.map(x => item(x, '<span class="badge-c">conjunto</span>')).join('');
+  el.innerHTML = html;
   el.classList.add('show');
   el.querySelectorAll('.it').forEach(it => it.addEventListener('click', () => reveal(+it.dataset.row)));
 }
@@ -181,9 +190,12 @@ function reveal(id) {
 
 function renderRow(r) {
   const n = r.n, hoja = !r._kids;
-  const cls = hoja ? ((n.coste_total > 0 && n.tipo) ? 'mp' : 'sinprecio') : 'branch';
+  const cls = !hoja ? 'branch'
+    : n.de_conjunto ? 'conjunto'
+    : (n.coste_total > 0 && n.tipo) ? 'mp' : 'sinprecio';
   const arrow = r._kids ? '▸' : '•';
   const coste = n.coste_total || 0;
+  const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>' : esc(n.tipo || '');
   return `<tr id="r${r._id}" class="${cls}" data-id="${r._id}">
     <td>${r._depth}</td>
     <td class="name" style="padding-left:${6 + r._depth * 16}px">
@@ -191,7 +203,7 @@ function renderRow(r) {
     <td class="code">${n.id}</td>
     <td class="num">${hoja ? fmt(n.cant) : ''}</td>
     <td>${hoja ? esc(n.unidad || '') : ''}</td>
-    <td>${esc(n.tipo || '')}</td>
+    <td>${tipoCell}</td>
     <td class="num">${hoja ? eur(n.precio) : ''}</td>
     <td class="num">${eur(coste)}</td>
   </tr>`;

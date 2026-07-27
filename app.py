@@ -51,6 +51,7 @@ def construir_arbol(df, codigo, nombre):
         nodo = {"id": r["IdArticulo"], "nombre": r["Componente"],
                 "cant": _num(r["Cant"]), "unidad": r["Unidad"],
                 "tipo": r["TipoCompra"], "precio": _num(r["PrecioCompra"]),
+                "de_conjunto": int(r.get("DeConjunto", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -117,14 +118,21 @@ def api_excel():
 # Flujo por LOTE: subir un Excel con IDs -> Excel con el coste total de cada uno
 # ---------------------------------------------------------------------------
 
+def _norm(s):
+    """minúsculas sin tildes, para comparar nombres de columna."""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(s).lower())
+                   if not unicodedata.combining(c)).strip()
+
+
 def extraer_ids(file):
     """Extrae los IDs de artículo de un Excel subido. Busca una columna que
     se llame algo tipo 'articulo'/'codigo'/'id'; si no, usa la primera columna."""
     df = pd.read_excel(file, dtype=str)
     objetivo = None
     for col in df.columns:
-        cl = str(col).strip().lower()
-        if "articulo" in cl or "codigo" in cl or "código" in cl or cl in ("id", "ref", "referencia"):
+        cl = _norm(col)
+        if "articul" in cl or "codig" in cl or cl in ("id", "ref", "referencia"):
             objetivo = col
             break
     if objetivo is None:
@@ -149,27 +157,28 @@ def resumen_lote(codigo):
     nombre = nombre_articulo(codigo)
     if df.empty:
         fila = {"IdArticulo": codigo, "Descripcion": nombre, "CosteTotal": None,
-                "Sin tipo": 0, "Sin precio": 0, "Estado": "No encontrado / sin datos"}
+                "De conjunto": 0, "Sin tipo": 0, "Sin precio": 0, "Estado": "No encontrado / sin datos"}
         return fila, []
 
     total = round(float(df["Coste"].sum()), 4)
     padres = set(df["Articulo"])
     hojas = df[~df["IdArticulo"].isin(padres)]
-    sin_tipo = hojas[hojas["TipoCompra"].isna()].drop_duplicates("IdArticulo")
+    de_conj = hojas[hojas["DeConjunto"] == 1].drop_duplicates("IdArticulo")
+    sin_tipo = hojas[(hojas["TipoCompra"].isna()) & (hojas["DeConjunto"] == 0)].drop_duplicates("IdArticulo")
     sin_precio = df[df["SinPrecio"] == 1].drop_duplicates("IdArticulo")
 
     faltantes = []
-    for r in sin_tipo.to_dict(orient="records"):
-        faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
-                          "Descripcion": r["Componente"], "Motivo": "Sin tipo de aprovisionamiento"})
-    for r in sin_precio.to_dict(orient="records"):
-        faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
-                          "Descripcion": r["Componente"], "Motivo": "Sin precio de compra"})
+    for motivo, sub in [("Proviene de conjunto", de_conj),
+                        ("Sin tipo de aprovisionamiento", sin_tipo),
+                        ("Sin precio de compra", sin_precio)]:
+        for r in sub.to_dict(orient="records"):
+            faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
+                              "Descripcion": r["Componente"], "Motivo": motivo})
 
-    n_sin_tipo, n_sin_precio = len(sin_tipo), len(sin_precio)
+    n_conj, n_sin_tipo, n_sin_precio = len(de_conj), len(sin_tipo), len(sin_precio)
     fila = {"IdArticulo": codigo, "Descripcion": nombre, "CosteTotal": total,
-            "Sin tipo": n_sin_tipo, "Sin precio": n_sin_precio,
-            "Estado": "OK" if (n_sin_tipo + n_sin_precio) == 0 else "Incompleto"}
+            "De conjunto": n_conj, "Sin tipo": n_sin_tipo, "Sin precio": n_sin_precio,
+            "Estado": "OK" if (n_conj + n_sin_tipo + n_sin_precio) == 0 else "Incompleto"}
     return fila, faltantes
 
 
