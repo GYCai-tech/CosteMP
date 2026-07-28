@@ -33,6 +33,11 @@ def _num(v):
     return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
 
 
+def _s(v):
+    """Como _num pero para campos de texto (evita NaN suelto e invalido en el JSON)."""
+    return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+
 RATE_OP = 17.0 / 60.0   # 17 €/h operario -> €/min
 
 
@@ -50,13 +55,13 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
         # fila del propio articulo (compra directa): el root ES la hoja
         if segs == [codigo]:
             root["coste"] = _num(r["Coste"]) or 0.0
-            root["cant"] = _num(r["Cant"]) or 1.0; root["unidad"] = r["Unidad"]
-            root["tipo"] = r["TipoCompra"]; root["precio"] = _num(r["PrecioCompra"])
+            root["cant"] = _num(r["Cant"]) or 1.0; root["unidad"] = _s(r["Unidad"])
+            root["tipo"] = _s(r["TipoCompra"]); root["precio"] = _num(r["PrecioCompra"])
             continue
         nodo = {"id": r["IdArticulo"], "nombre": r["Componente"],
-                "cant": _num(r["Cant"]), "unidad": r["Unidad"],
-                "tipo": r["TipoCompra"], "precio": _num(r["PrecioCompra"]),
-                "fuente": r.get("PrecioFuente"),
+                "cant": _num(r["Cant"]), "unidad": _s(r["Unidad"]),
+                "tipo": _s(r["TipoCompra"]), "precio": _num(r["PrecioCompra"]),
+                "fuente": _s(r.get("PrecioFuente")),
                 "de_conjunto": int(r.get("DeConjunto", 0) or 0),
                 "sin_escandallo": int(r.get("SinEscandallo", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
