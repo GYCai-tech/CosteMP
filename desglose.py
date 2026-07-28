@@ -33,9 +33,15 @@ from db import get_engine
 #     servicio subcontratado y SI se suma al de sus propios materiales.
 SQL = text("""
 WITH
--- Precio de compra por articulo, con prioridad:
---   1) ULTIMO ALBARAN con precio real (Pedidos_Prov_Lineas, la compra mas reciente).
---   2) FALLBACK: LISTA de precios de proveedor (Listas_Precios_Prov_Art), solo si no hay albaran.
+-- Precio de compra por articulo: UNICAMENTE el ULTIMO ALBARAN con precio real
+-- (Pedidos_Prov_Lineas, la compra mas reciente), con su descuento.
+--
+-- NO se usa la lista de precios de proveedor (Listas_Precios_Prov_Art) como
+-- fallback: una tarifa es lo que el proveedor PIDE, no lo que se ha pagado.
+-- Costear con ella mete importes que nadie ha desembolsado y que ademas pueden
+-- estar en otra unidad que el albaran (p.ej. cordon a 0,026 EUR/m en tarifa
+-- frente a 24,79 EUR/rollo en albaran). Si no hay compra, no hay coste: la
+-- linea sale marcada como "sin precio" para que se vea el hueco.
 precio AS (
     SELECT IdArticulo, Precio, Descuento, 'albaran' AS Fuente FROM (
         SELECT IdArticulo, Precio_EURO AS Precio, Descuento,
@@ -45,21 +51,6 @@ precio AS (
         WHERE FechaAlbaran IS NOT NULL AND Precio_EURO > 0
     ) t
     WHERE rn = 1
-
-    UNION ALL
-
-    -- de la lista se coge el precio MAS RECIENTE (por FechaInsertUpdate)
-    SELECT IdArticulo, Precio, 0 AS Descuento, 'lista' AS Fuente FROM (
-        SELECT lp.IdArticulo, lp.Precio,
-               ROW_NUMBER() OVER (PARTITION BY lp.IdArticulo
-                                  ORDER BY lp.FechaInsertUpdate DESC, lp.IdLista DESC) AS rn
-        FROM dbo.Listas_Precios_Prov_Art lp
-        WHERE lp.Precio > 0
-          AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl
-                          WHERE pl.IdArticulo = lp.IdArticulo
-                            AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0)
-    ) t
-    WHERE t.rn = 1
 ),
 -- Tiempo de operacion (min/pieza) por articulo: media de los bonos de produccion
 -- (TotalMinutos/TotalPiezas) con fase activa. Es la base del coste de mano de obra.
@@ -166,13 +157,26 @@ marcado AS (
         CASE WHEN d.Unidad = 'gr' THEN d.Cant / 1000.0 ELSE d.Cant END AS CantConv,
         CASE WHEN EXISTS (SELECT 1 FROM componentes c2 WHERE c2.Padre = d.IdArticulo)
              THEN 0 ELSE 1 END AS EsHoja,
-        -- Valorable a precio = es comprable Y (es hoja O es TRABAJO EXTERNO).
-        -- Un articulo con escandallo se costea por sus componentes; valorarlo
-        -- ademas a su precio de compra lo contaria dos veces.
+        -- Valorable a precio de albaran. Dos vias:
+        --  (a) tiene TIPO DE APROVISIONAMIENTO (=alguien confirmo que se compra)
+        --      y es hoja, o es TRABAJO EXTERNO (tipo 5, el precio es el servicio
+        --      y se suma a sus materiales). Un articulo con escandallo se costea
+        --      por sus componentes; valorarlo ademas a precio lo contaria dos veces.
+        --  (b) NO tiene tipo pero tampoco ha tenido NUNCA fase de fabricacion:
+        --      solo puede ser una compra a la que le falta rellenar el tipo en el
+        --      ERP. Se valora igual (si hay albaran) en vez de contarla como 0 EUR
+        --      en silencio. Las piezas con fases desactivadas quedan fuera a
+        --      proposito: esas siguen avisando como "sin escandallo".
         CASE WHEN a2.IdTipoAprovisionamiento IS NOT NULL
                   AND (a2.IdTipoAprovisionamiento = 5
                        OR NOT EXISTS (SELECT 1 FROM componentes c3 WHERE c3.Padre = d.IdArticulo))
-             THEN 1 ELSE 0 END AS EsValorable
+             THEN 1
+             WHEN a2.IdTipoAprovisionamiento IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM componentes c4 WHERE c4.Padre = d.IdArticulo)
+                  AND NOT EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs3
+                                  WHERE fs3.IdArticulo = d.IdArticulo)
+             THEN 1
+             ELSE 0 END AS EsValorable
     FROM desglose d
     LEFT JOIN dbo.Articulos a2 ON a2.IdArticulo = d.IdArticulo
 )
@@ -184,17 +188,17 @@ SELECT
     m.CantConv AS Cant,
     m.Unidad,
     t.Descrip AS TipoCompra,                       -- MATERIA PRIMA / MERCADERIA / ...
-    -- Criterio de valoracion: TIPO DE APROVISIONAMIENTO (decidido por negocio),
-    -- restringido a las filas valorables (ver EsValorable en 'marcado').
+    -- Precio = ultimo ALBARAN de compra, solo en las filas valorables
+    -- (ver EsValorable en 'marcado'). Nunca tarifa.
     CASE WHEN m.EsValorable = 1 THEN p.Precio END    AS PrecioCompra,
     CASE WHEN m.EsValorable = 1 THEN p.Descuento END AS Descuento,
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL
-         THEN p.Fuente END AS PrecioFuente,       -- 'albaran' o 'lista' (fallback)
+         THEN p.Fuente END AS PrecioFuente,       -- siempre 'albaran'
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL
          THEN m.CantConv * (p.Precio - p.Precio * COALESCE(p.Descuento, 0) / 100.0)
     END AS Coste,
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL THEN 1 ELSE 0 END AS Valorado,
-    -- comprable (con tipo) pero SIN precio de compra (hueco de coste)
+    -- valorable pero SIN albaran de compra: hueco de coste real, hay que verlo
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NULL
          THEN 1 ELSE 0 END AS SinPrecio,
     -- 1 si es una PIEZA FABRICADA (tiene fases) sin escandallo ACTIVO para
@@ -452,8 +456,9 @@ def _categoria(n):
         return "noesc" if n.get("sin_tiempo") else "rama"
     if n.get("de_conjunto"): return "conjunto"
     if n.get("sin_escandallo"): return "noesc"
-    # hueco = falta el dato (sin tipo o sin precio), no que el importe sea minimo
-    return "mp" if (n.get("tipo") and n.get("precio") is not None) else "sinprecio"
+    # hueco = no hay precio de albaran, no que falte el tipo ni que el importe
+    # sea minimo (el tipo ya no se exige para valorar)
+    return "mp" if n.get("precio") is not None else "sinprecio"
 
 
 _FILLS = {"mp": "FEF3C7", "sinprecio": "FDE0E0", "conjunto": "EDE9FE",
