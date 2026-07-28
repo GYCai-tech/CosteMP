@@ -91,9 +91,11 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0):
         for h in n["hijos"]:
             rollup(h)
             mat += h["coste_mat"]; op += h["coste_op_total"]
-        n["coste_mat"] = round(mat, 4)
-        n["coste_op_total"] = round(op, 4)
-        n["coste_total"] = round(mat + op, 4)
+        # 6 decimales: con 4, un coste de 8,5e-06 EUR se redondeaba a 0,0 exacto
+        # y desaparecia del arbol (ademas de dispararse como "sin coste").
+        n["coste_mat"] = round(mat, 6)
+        n["coste_op_total"] = round(op, 6)
+        n["coste_total"] = round(mat + op, 6)
 
     rollup(root)
     return root

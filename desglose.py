@@ -423,9 +423,11 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0):
         for h in n["hijos"]:
             rollup(h)
             mat += h["coste_mat"]; op += h["coste_op_total"]
-        n["coste_mat"] = round(mat, 4)
-        n["coste_op_total"] = round(op, 4)
-        n["coste_total"] = round(mat + op, 4)
+        # 6 decimales: con 4, un coste de 8,5e-06 EUR se redondeaba a 0,0 exacto
+        # y desaparecia del arbol (ademas de dispararse como "sin coste").
+        n["coste_mat"] = round(mat, 6)
+        n["coste_op_total"] = round(op, 6)
+        n["coste_total"] = round(mat + op, 6)
 
     rollup(root)
     return root
@@ -450,7 +452,8 @@ def _categoria(n):
         return "noesc" if n.get("sin_tiempo") else "rama"
     if n.get("de_conjunto"): return "conjunto"
     if n.get("sin_escandallo"): return "noesc"
-    return "mp" if (n.get("coste_total") and n.get("tipo")) else "sinprecio"
+    # hueco = falta el dato (sin tipo o sin precio), no que el importe sea minimo
+    return "mp" if (n.get("tipo") and n.get("precio") is not None) else "sinprecio"
 
 
 _FILLS = {"mp": "FEF3C7", "sinprecio": "FDE0E0", "conjunto": "EDE9FE",

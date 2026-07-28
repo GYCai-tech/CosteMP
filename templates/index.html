@@ -178,7 +178,9 @@ async function cargar(codigo, desc) {
       }
       else if (n.de_conjunto) bump(deConj, n, id);                     // pieza de conjunto
       else if (n.sin_escandallo) bump(sinEsc, n, id);                  // pieza fabricada sin fase activa
-      else if (!(n.coste_total > 0) || !n.tipo) bump(holes, n, id);    // hoja sin coste/sin tipo
+      // hueco REAL = falta el dato (sin tipo o sin precio). No se mira el importe:
+      // un coste legitimo de fraccion de centimo no es un hueco.
+      else if (!n.tipo || n.precio == null) bump(holes, n, id);
     }
   })(data.arbol.hijos.length ? data.arbol.hijos : [data.arbol], 0, null);
 
@@ -231,7 +233,7 @@ function renderRow(r) {
   const cls = !hoja ? ('branch' + (n.sin_tiempo ? ' notiempo' : ''))
     : n.de_conjunto ? 'conjunto'
     : n.sin_escandallo ? 'noesc'
-    : (n.coste_total > 0 && n.tipo) ? 'mp' : 'sinprecio';
+    : (n.tipo && n.precio != null) ? 'mp' : 'sinprecio';
   const arrow = r._kids ? '▸' : '•';
   const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>'
     : n.sin_escandallo ? '<span class="badge-s">sin escandallo</span>'
