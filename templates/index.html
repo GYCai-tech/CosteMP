@@ -100,7 +100,8 @@
     <thead><tr>
       <th>Nivel</th><th>Componente</th><th>IdArticulo</th>
       <th class="num">Cant</th><th>Ud</th><th>Tipo</th>
-      <th class="num">Precio €</th><th class="num">Tiempo min</th><th class="num">Coste op €</th><th class="num">Coste total €</th>
+      <th class="num">Precio €</th><th class="num">Coste MP €</th>
+      <th class="num">Tiempo min</th><th class="num">Coste op €</th><th class="num">Coste total €</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -186,7 +187,9 @@ async function cargar(codigo, desc) {
 
   tbody.innerHTML = rows.map(renderRow).join('')
     + `<tr class="totrow">
-        <td colspan="8" style="text-align:right">TOTAL &nbsp;·&nbsp; material ${eur(data.coste_material)} € · operación ${eur(data.coste_operacion)} €</td>
+        <td colspan="7" style="text-align:right">TOTAL</td>
+        <td class="num">${eur(data.coste_material)}</td>
+        <td></td>
         <td class="num">${eur(data.coste_operacion)}</td>
         <td class="num">${eur(data.coste_total)} €</td>
       </tr>`;
@@ -255,6 +258,7 @@ function renderRow(r) {
     <td>${esc(n.unidad || '')}</td>
     <td>${tipoCell}</td>
     <td class="num">${hoja ? (eur(n.precio) + (n.fuente === 'lista' ? ' <span style="color:#7c3aed;font-size:10px">lista</span>' : '')) : ''}</td>
+    <td class="num">${eur(n.coste_mat)}</td>
     <td class="num">${tiempoCell}</td>
     <td class="num">${!hoja ? eur(n.coste_op) : ''}</td>
     <td class="num">${eur(n.coste_total)}</td>
