@@ -25,9 +25,12 @@ from db import get_engine
 #     Un conjunto sin fase se explota por sus componentes x Unidades (misma logica
 #     recursiva que las fases). Prioridad: si hay fase activa manda la fase.
 #   - se valora a ultimo precio de compra cada articulo con IdTipoAprovisionamiento
-#     (=se compra), en cualquier nivel, y se clasifica por su tipo (MATERIA PRIMA /
-#     MERCADERIA / ...). NOTA: un semielaborado que ademas tenga tipo se cuenta a su
-#     precio y por sus materiales (caso "trabajos externos" / fabricar-o-comprar).
+#     (=se compra) que sea HOJA del arbol, y se clasifica por su tipo (MATERIA PRIMA /
+#     MERCADERIA / ...). Si el articulo TIENE escandallo no se valora a precio: su
+#     coste sale de explotar sus componentes; valorarlo ademas a precio lo contaria
+#     dos veces (caso COMEDERO 2B MIXTO, tipo ALMACEN con compras historicas).
+#     UNICA EXCEPCION: TRABAJOS EXTERNOS (tipo 5), donde el precio es el coste del
+#     servicio subcontratado y SI se suma al de sus propios materiales.
 SQL = text("""
 WITH
 -- Precio de compra por articulo, con prioridad:
@@ -69,6 +72,20 @@ tiempo_op AS (
     INNER JOIN dbo.Ordenes_Bonos ob ON ob.IdBono = obs.IdBono AND ob.IdOrden = obs.IdOrden
     WHERE ob.TotalPiezas > 0
     GROUP BY obs.IdArticulo
+),
+-- Articulos cuya fase activa NO declara ninguna operacion de fabricacion:
+-- todos sus trabajos tienen OrdenTrabajo = 0 (los "Sin operacion" del ERP).
+-- La fase existe solo para llevar los materiales. Que no tengan tiempo NO es
+-- un hueco de datos, es lo correcto: no hay mano de obra que imputar.
+-- Se exige que NO haya ningun trabajo con OrdenTrabajo = 1 (hay 5 fases mixtas).
+sin_operacion AS (
+    SELECT DISTINCT fs.IdArticulo
+    FROM dbo.Fases_Salidas fs
+    INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
+    WHERE EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                  WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 0)
+      AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                      WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
 ),
 -- Componentes de cada articulo, unificando las dos vias de escandallo.
 componentes AS (
@@ -142,13 +159,22 @@ desglose AS (
     INNER JOIN componentes c ON c.Padre = d.IdArticulo
     WHERE d.Ruta NOT LIKE '%|' + c.Hijo + '|%'          -- corta ciclos A->B->A
 ),
--- Marca cada fila: cantidad convertida (gr->kg) y si es hoja (sin escandallo)
+-- Marca cada fila: cantidad convertida (gr->kg), si es hoja (sin escandallo) y si
+-- se puede valorar a precio de compra.
 marcado AS (
     SELECT d.*,
         CASE WHEN d.Unidad = 'gr' THEN d.Cant / 1000.0 ELSE d.Cant END AS CantConv,
         CASE WHEN EXISTS (SELECT 1 FROM componentes c2 WHERE c2.Padre = d.IdArticulo)
-             THEN 0 ELSE 1 END AS EsHoja
+             THEN 0 ELSE 1 END AS EsHoja,
+        -- Valorable a precio = es comprable Y (es hoja O es TRABAJO EXTERNO).
+        -- Un articulo con escandallo se costea por sus componentes; valorarlo
+        -- ademas a su precio de compra lo contaria dos veces.
+        CASE WHEN a2.IdTipoAprovisionamiento IS NOT NULL
+                  AND (a2.IdTipoAprovisionamiento = 5
+                       OR NOT EXISTS (SELECT 1 FROM componentes c3 WHERE c3.Padre = d.IdArticulo))
+             THEN 1 ELSE 0 END AS EsValorable
     FROM desglose d
+    LEFT JOIN dbo.Articulos a2 ON a2.IdArticulo = d.IdArticulo
 )
 SELECT
     m.Nivel,
@@ -158,39 +184,43 @@ SELECT
     m.CantConv AS Cant,
     m.Unidad,
     t.Descrip AS TipoCompra,                       -- MATERIA PRIMA / MERCADERIA / ...
-    -- Criterio de valoracion: TIPO DE APROVISIONAMIENTO (decidido por negocio).
-    -- Se valora todo articulo con IdTipoAprovisionamiento (=se compra) que tenga precio.
-    CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL THEN p.Precio END    AS PrecioCompra,
-    CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL THEN p.Descuento END AS Descuento,
-    CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NOT NULL
+    -- Criterio de valoracion: TIPO DE APROVISIONAMIENTO (decidido por negocio),
+    -- restringido a las filas valorables (ver EsValorable en 'marcado').
+    CASE WHEN m.EsValorable = 1 THEN p.Precio END    AS PrecioCompra,
+    CASE WHEN m.EsValorable = 1 THEN p.Descuento END AS Descuento,
+    CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL
          THEN p.Fuente END AS PrecioFuente,       -- 'albaran' o 'lista' (fallback)
-    CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NOT NULL
+    CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL
          THEN m.CantConv * (p.Precio - p.Precio * COALESCE(p.Descuento, 0) / 100.0)
     END AS Coste,
-    CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NOT NULL THEN 1 ELSE 0 END AS Valorado,
+    CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL THEN 1 ELSE 0 END AS Valorado,
     -- comprable (con tipo) pero SIN precio de compra (hueco de coste)
-    CASE WHEN art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NULL
+    CASE WHEN m.EsValorable = 1 AND p.Precio IS NULL
          THEN 1 ELSE 0 END AS SinPrecio,
     -- 1 si es una PIEZA FABRICADA (tiene fases) sin escandallo ACTIVO para
     -- costearla y sin valorar: su fase esta desactivada/vacia -> no se puede
     -- costear aqui. (NO marca tornilleria/compras: esas son sin-precio/sin-tipo.)
     CASE WHEN m.EsHoja = 1
-              AND NOT (art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NOT NULL)
+              AND NOT (m.EsValorable = 1 AND p.Precio IS NOT NULL)
               AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fss WHERE fss.IdArticulo = m.IdArticulo)
          THEN 1 ELSE 0 END AS SinEscandallo,
     -- subconjunto de SinEscandallo que ademas es componente de un conjunto
     -- (su coste viene por el conjunto).
     CASE WHEN m.EsHoja = 1
-              AND NOT (art.IdTipoAprovisionamiento IS NOT NULL AND p.Precio IS NOT NULL)
+              AND NOT (m.EsValorable = 1 AND p.Precio IS NOT NULL)
               AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fss WHERE fss.IdArticulo = m.IdArticulo)
               AND EXISTS (SELECT 1 FROM dbo.Articulos_Conjuntos ac WHERE ac.IdArticulo = m.IdArticulo)
          THEN 1 ELSE 0 END AS DeConjunto,
     tp.TiempoMin AS TiempoOp,                       -- min/pieza de operacion (mano de obra)
+    -- 1 = su fase no declara operacion ("Sin operacion"): no lleva mano de obra
+    -- y por tanto no debe avisarse como "sin tiempo".
+    CASE WHEN so.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS SinOperacion,
     m.Ruta AS Ruta                                 -- ruta jerarquica para el arbol
 FROM marcado m
 LEFT JOIN dbo.Articulos  art ON art.IdArticulo = m.IdArticulo
 LEFT JOIN precio         p   ON p.IdArticulo   = m.IdArticulo
 LEFT JOIN tiempo_op      tp  ON tp.IdArticulo  = m.IdArticulo
+LEFT JOIN sin_operacion  so  ON so.IdArticulo  = m.IdArticulo
 LEFT JOIN dbo.Articulos_Tipos_Aprovisionamiento t
        ON t.IdTipoAprovisionamiento = art.IdTipoAprovisionamiento
 ORDER BY m.Ruta
@@ -198,10 +228,14 @@ OPTION (MAXRECURSION 0);   -- sin limite de niveles
 """)
 
 
+# Articulos.Estado: 0 = activo, 1 = dado de baja / descatalogado.
+# (FechaBajaArt existe pero esta practicamente sin usar: 1 registro en toda la tabla,
+#  asi que Estado es el unico indicador fiable de baja.)
 SQL_BUSCAR = text("""
 SELECT TOP (:limite)
     a.IdArticulo,
     a.Descrip,
+    a.Estado AS Baja,                          -- 1 = descatalogado
     CASE WHEN EXISTS (
         SELECT 1 FROM dbo.Fases_Salidas fs
         INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
@@ -210,17 +244,22 @@ SELECT TOP (:limite)
         SELECT 1 FROM dbo.Articulos_Conjuntos ac WHERE ac.IdArticuloPadre = a.IdArticulo
     ) THEN 1 ELSE 0 END AS Fabricable
 FROM dbo.Articulos a
-WHERE a.IdArticulo LIKE :q OR a.Descrip LIKE :q
+WHERE (a.IdArticulo LIKE :q OR a.Descrip LIKE :q)
+  AND (:incluir_bajas = 1 OR a.Estado = 0)     -- por defecto oculta los de baja
 ORDER BY Fabricable DESC, a.IdArticulo
 """)
 
 
-def buscar_articulos(q: str, limite: int = 50) -> pd.DataFrame:
-    """Busca articulos por codigo o descripcion. Los fabricables van primero."""
+def buscar_articulos(q: str, limite: int = 50, incluir_bajas: bool = False) -> pd.DataFrame:
+    """Busca articulos por codigo o descripcion. Los fabricables van primero.
+
+    Por defecto solo devuelve articulos ACTIVOS (Estado = 0); con incluir_bajas=True
+    tambien salen los descatalogados, marcados con la columna Baja."""
     q = (q or "").strip()
     limite = max(1, min(int(limite), 200))
     with get_engine().connect() as cn:
-        return pd.read_sql(SQL_BUSCAR, cn, params={"q": f"%{q}%", "limite": limite})
+        return pd.read_sql(SQL_BUSCAR, cn, params={"q": f"%{q}%", "limite": limite,
+                                                   "incluir_bajas": 1 if incluir_bajas else 0})
 
 
 SQL_NOMBRE = text("SELECT Descrip FROM dbo.Articulos WHERE IdArticulo = :codigo")
@@ -250,6 +289,28 @@ def tiempo_operacion(codigo: str):
     with get_engine().connect() as cn:
         r = cn.execute(SQL_TIEMPO, {"codigo": codigo}).fetchone()
     return float(r[0]) if r and r[0] is not None else None
+
+
+SQL_SIN_OPERACION = text("""
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.Fases_Salidas fs
+    INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
+    WHERE fs.IdArticulo = :codigo
+      AND EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                  WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 0)
+      AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                      WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
+) THEN 1 ELSE 0 END
+""")
+
+
+def sin_operacion(codigo: str) -> int:
+    """1 si la fase activa del articulo no declara operacion de fabricacion
+    (todos sus trabajos son 'Sin operacion'). Para el nodo raiz del arbol."""
+    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
+    with get_engine().connect() as cn:
+        r = cn.execute(SQL_SIN_OPERACION, {"codigo": codigo}).fetchone()
+    return int(r[0]) if r else 0
 
 
 SQL_ESCANDALLO = text("""
@@ -306,11 +367,18 @@ def _num(v):
     return None if v is None or (isinstance(v, float) and pd.isna(v)) else float(v)
 
 
-def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
+def _s(v):
+    """Campos de texto: NaN -> None. (NaN es un float TRUTHY, asi que colarlo en
+    un `x or defecto` cortocircuita el defecto y deja la celda vacia.)"""
+    return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
+
+
+def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0):
     """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
     fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "fuente": None, "de_conjunto": 0, "sin_escandallo": 0,
+            "sin_operacion": int(sin_op_raiz or 0),
             "tiempo": tiempo_raiz, "coste": 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -319,16 +387,17 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
         segs = [s for s in ruta.split("|") if s]
         if segs == [codigo]:
             root["coste"] = _num(r["Coste"]) or 0.0
-            root["cant"] = _num(r["Cant"]) or 1.0; root["unidad"] = r["Unidad"]
-            root["tipo"] = r["TipoCompra"]; root["precio"] = _num(r["PrecioCompra"])
-            root["fuente"] = r.get("PrecioFuente")
+            root["cant"] = _num(r["Cant"]) or 1.0; root["unidad"] = _s(r["Unidad"])
+            root["tipo"] = _s(r["TipoCompra"]); root["precio"] = _num(r["PrecioCompra"])
+            root["fuente"] = _s(r.get("PrecioFuente"))
             continue
         nodo = {"id": r["IdArticulo"], "nombre": r["Componente"],
-                "cant": _num(r["Cant"]), "unidad": r["Unidad"],
-                "tipo": r["TipoCompra"], "precio": _num(r["PrecioCompra"]),
-                "fuente": r.get("PrecioFuente"),
+                "cant": _num(r["Cant"]), "unidad": _s(r["Unidad"]),
+                "tipo": _s(r["TipoCompra"]), "precio": _num(r["PrecioCompra"]),
+                "fuente": _s(r.get("PrecioFuente")),
                 "de_conjunto": int(r.get("DeConjunto", 0) or 0),
                 "sin_escandallo": int(r.get("SinEscandallo", 0) or 0),
+                "sin_operacion": int(r.get("SinOperacion", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
@@ -340,7 +409,13 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
         if n["es_hoja"]:
             n["coste_op"] = 0.0; n["sin_tiempo"] = 0
         elif n.get("tiempo") is not None:
+            # hay tiempo medido en bonos: manda el dato real aunque la fase
+            # este declarada "sin operacion".
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4); n["sin_tiempo"] = 0
+        elif n.get("sin_operacion"):
+            # su fase no declara operacion: 0 EUR de mano de obra es CORRECTO,
+            # no es un dato que falte -> no se avisa como "sin tiempo".
+            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
         else:
             n["coste_op"] = 0.0; n["sin_tiempo"] = 1
         mat = n["coste"] or 0.0
@@ -394,7 +469,7 @@ def _resaltar_sin_precio(ws, flags, ncols):
 def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     """Escribe el Excel (tres hojas): Desglose (arbol indentado con material y
     operacion, coloreado por categoria), Comprados y Resumen (material+operacion+total)."""
-    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo))
+    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo))
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
@@ -403,7 +478,10 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
         hoja = not n["hijos"]
         tipo_txt = ("de conjunto" if n.get("de_conjunto")
                     else "sin escandallo" if n.get("sin_escandallo")
-                    else (n.get("tipo") or ("fabricado" if not hoja else "")))
+                    else (n.get("tipo") or
+                          ("" if hoja
+                           else "fabricado sin operación" if n.get("sin_operacion")
+                           else "fabricado")))
         reg.append({
             "Nivel": depth,
             "Componente": ("    " * depth) + (n.get("nombre") or ""),

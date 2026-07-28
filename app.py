@@ -13,7 +13,7 @@ from openpyxl.styles import PatternFill
 from flask import Flask, request, jsonify, send_file, render_template
 
 from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_excel,
-                      tiempo_operacion, escandallo_directo)
+                      tiempo_operacion, escandallo_directo, sin_operacion)
 
 app = Flask(__name__)
 
@@ -41,11 +41,12 @@ def _s(v):
 RATE_OP = 17.0 / 60.0   # 17 €/h operario -> €/min
 
 
-def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
+def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0):
     """Árbol del escandallo con coste de MATERIAL (hojas compradas) y de OPERACIÓN
     (nodos fabricados = tiempo × 17 €/h), y el rollup material+operación por nodo."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "de_conjunto": 0, "sin_escandallo": 0,
+            "sin_operacion": int(sin_op_raiz or 0),
             "tiempo": tiempo_raiz, "coste": 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -64,6 +65,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
                 "fuente": _s(r.get("PrecioFuente")),
                 "de_conjunto": int(r.get("DeConjunto", 0) or 0),
                 "sin_escandallo": int(r.get("SinEscandallo", 0) or 0),
+                "sin_operacion": int(r.get("SinOperacion", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
@@ -76,7 +78,12 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
         if n["es_hoja"]:
             n["coste_op"] = 0.0; n["sin_tiempo"] = 0
         elif n.get("tiempo") is not None:
+            # hay tiempo medido en bonos: manda el dato real
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4); n["sin_tiempo"] = 0
+        elif n.get("sin_operacion"):
+            # su fase no declara operación ("Sin operación"): 0 € de mano de obra
+            # es CORRECTO, no es un dato que falte -> no se avisa
+            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
         else:
             n["coste_op"] = 0.0; n["sin_tiempo"] = 1     # fabricado pero sin tiempo de bono
         mat = n["coste"] or 0.0
@@ -102,7 +109,9 @@ def api_buscar():
     q = request.args.get("q", "")
     if len(q.strip()) < 2:
         return jsonify([])
-    df = buscar_articulos(q)
+    # bajas=1 -> incluye tambien los articulos descatalogados (Estado = 1)
+    incluir_bajas = request.args.get("bajas", "") in ("1", "true", "si")
+    df = buscar_articulos(q, incluir_bajas=incluir_bajas)
     return jsonify(_records(df))
 
 
@@ -110,7 +119,8 @@ def api_buscar():
 def api_desglose():
     codigo = request.args.get("codigo", "")
     df = desglose(codigo)
-    arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_operacion(codigo))
+    arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_operacion(codigo),
+                             sin_operacion(codigo))
              if not df.empty else None)
     return jsonify({
         "codigo": codigo,
@@ -211,7 +221,7 @@ def resumen_lote(codigo):
                 "Estado": "No encontrado / sin datos"}
         return fila, []
 
-    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo))
+    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo))
     coste_mat = arbol["coste_mat"] if arbol else 0.0
     coste_op = arbol["coste_op_total"] if arbol else 0.0
     coste_tot = arbol["coste_total"] if arbol else 0.0
