@@ -12,7 +12,8 @@ import pandas as pd
 from openpyxl.styles import PatternFill
 from flask import Flask, request, jsonify, send_file, render_template
 
-from desglose import buscar_articulos, desglose, nombre_articulo, exportar_excel
+from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_excel,
+                      tiempo_operacion, escandallo_directo)
 
 app = Flask(__name__)
 
@@ -32,11 +33,15 @@ def _num(v):
     return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
 
 
-def construir_arbol(df, codigo, nombre):
-    """Construye el árbol jerárquico del escandallo a partir de la columna Ruta,
-    con el coste acumulado (rollup) en cada nodo (fase/subconjunto)."""
-    root = {"id": codigo, "nombre": nombre, "cant": None, "unidad": None,
-            "tipo": None, "coste": 0.0, "hijos": []}
+RATE_OP = 17.0 / 60.0   # 17 €/h operario -> €/min
+
+
+def construir_arbol(df, codigo, nombre, tiempo_raiz=None):
+    """Árbol del escandallo con coste de MATERIAL (hojas compradas) y de OPERACIÓN
+    (nodos fabricados = tiempo × 17 €/h), y el rollup material+operación por nodo."""
+    root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
+            "precio": None, "de_conjunto": 0, "sin_escandallo": 0,
+            "tiempo": tiempo_raiz, "coste": 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
     for r in df.sort_values("Ruta").to_dict(orient="records"):
@@ -45,23 +50,38 @@ def construir_arbol(df, codigo, nombre):
         # fila del propio articulo (compra directa): el root ES la hoja
         if segs == [codigo]:
             root["coste"] = _num(r["Coste"]) or 0.0
-            root["cant"] = _num(r["Cant"]); root["unidad"] = r["Unidad"]
-            root["tipo"] = r["TipoCompra"]
+            root["cant"] = _num(r["Cant"]) or 1.0; root["unidad"] = r["Unidad"]
+            root["tipo"] = r["TipoCompra"]; root["precio"] = _num(r["PrecioCompra"])
             continue
         nodo = {"id": r["IdArticulo"], "nombre": r["Componente"],
                 "cant": _num(r["Cant"]), "unidad": r["Unidad"],
                 "tipo": r["TipoCompra"], "precio": _num(r["PrecioCompra"]),
+                "fuente": r.get("PrecioFuente"),
                 "de_conjunto": int(r.get("DeConjunto", 0) or 0),
+                "sin_escandallo": int(r.get("SinEscandallo", 0) or 0),
+                "tiempo": _num(r.get("TiempoOp")),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
         nodos.get(padre_key, root)["hijos"].append(nodo)
 
     def rollup(n):
-        total = n["coste"] + sum(rollup(h) for h in n["hijos"])
-        n["coste_total"] = round(total, 4)
         n["es_hoja"] = not n["hijos"]
-        return total
+        # coste de operacion: solo nodos FABRICADOS (ramas)
+        if n["es_hoja"]:
+            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
+        elif n.get("tiempo") is not None:
+            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4); n["sin_tiempo"] = 0
+        else:
+            n["coste_op"] = 0.0; n["sin_tiempo"] = 1     # fabricado pero sin tiempo de bono
+        mat = n["coste"] or 0.0
+        op = n["coste_op"]
+        for h in n["hijos"]:
+            rollup(h)
+            mat += h["coste_mat"]; op += h["coste_op_total"]
+        n["coste_mat"] = round(mat, 4)
+        n["coste_op_total"] = round(op, 4)
+        n["coste_total"] = round(mat + op, 4)
 
     rollup(root)
     return root
@@ -85,15 +105,38 @@ def api_buscar():
 def api_desglose():
     codigo = request.args.get("codigo", "")
     df = desglose(codigo)
+    arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_operacion(codigo))
+             if not df.empty else None)
     return jsonify({
         "codigo": codigo,
         "lineas": len(df),
         "niveles": int(df["Nivel"].max()) if not df.empty else 0,
-        "coste_total": round(float(df["Coste"].sum()), 4) if not df.empty else 0,
+        "coste_material": arbol["coste_mat"] if arbol else 0,
+        "coste_operacion": arbol["coste_op_total"] if arbol else 0,
+        "coste_total": arbol["coste_total"] if arbol else 0,
         "sin_precio": int(df["SinPrecio"].sum()) if not df.empty else 0,
         "filas": _records(df),
-        "arbol": construir_arbol(df, codigo, nombre_articulo(codigo)) if not df.empty else None,
+        "arbol": arbol,
     })
+
+
+@app.route("/api/escandallo")
+def api_escandallo():
+    codigo = request.args.get("codigo", "")
+    df = escandallo_directo(codigo)
+    if df.empty:
+        return "Sin escandallo directo (¿es compra o conjunto?)", 404
+    df = df.rename(columns={"Descripcion": "Descripción"})
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xls:
+        df.to_excel(xls, sheet_name="Escandallo", index=False)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"escandallo_{codigo}.xlsx",
+    )
 
 
 @app.route("/api/excel")
@@ -157,28 +200,31 @@ def resumen_lote(codigo):
     nombre = nombre_articulo(codigo)
     if df.empty:
         fila = {"IdArticulo": codigo, "Descripcion": nombre, "CosteTotal": None,
-                "De conjunto": 0, "Sin tipo": 0, "Sin precio": 0, "Estado": "No encontrado / sin datos"}
+                "De conjunto": 0, "Sin escandallo": 0, "Sin tipo": 0, "Sin precio": 0,
+                "Estado": "No encontrado / sin datos"}
         return fila, []
 
     total = round(float(df["Coste"].sum()), 4)
     padres = set(df["Articulo"])
     hojas = df[~df["IdArticulo"].isin(padres)]
     de_conj = hojas[hojas["DeConjunto"] == 1].drop_duplicates("IdArticulo")
-    sin_tipo = hojas[(hojas["TipoCompra"].isna()) & (hojas["DeConjunto"] == 0)].drop_duplicates("IdArticulo")
+    sin_esc = hojas[(hojas["SinEscandallo"] == 1) & (hojas["DeConjunto"] == 0)].drop_duplicates("IdArticulo")
+    sin_tipo = hojas[(hojas["TipoCompra"].isna()) & (hojas["SinEscandallo"] == 0)].drop_duplicates("IdArticulo")
     sin_precio = df[df["SinPrecio"] == 1].drop_duplicates("IdArticulo")
 
     faltantes = []
     for motivo, sub in [("Proviene de conjunto", de_conj),
+                        ("Sin escandallo activo", sin_esc),
                         ("Sin tipo de aprovisionamiento", sin_tipo),
                         ("Sin precio de compra", sin_precio)]:
         for r in sub.to_dict(orient="records"):
             faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
                               "Descripcion": r["Componente"], "Motivo": motivo})
 
-    n_conj, n_sin_tipo, n_sin_precio = len(de_conj), len(sin_tipo), len(sin_precio)
+    n_conj, n_esc, n_st, n_sp = len(de_conj), len(sin_esc), len(sin_tipo), len(sin_precio)
     fila = {"IdArticulo": codigo, "Descripcion": nombre, "CosteTotal": total,
-            "De conjunto": n_conj, "Sin tipo": n_sin_tipo, "Sin precio": n_sin_precio,
-            "Estado": "OK" if (n_conj + n_sin_tipo + n_sin_precio) == 0 else "Incompleto"}
+            "De conjunto": n_conj, "Sin escandallo": n_esc, "Sin tipo": n_st, "Sin precio": n_sp,
+            "Estado": "OK" if (n_conj + n_esc + n_st + n_sp) == 0 else "Incompleto"}
     return fila, faltantes
 
 

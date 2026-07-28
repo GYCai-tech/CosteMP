@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Coste-MP · Despiece</title>
 <style>
-  body { margin: 0 auto; max-width: 940px; padding: 32px 20px;
+  body { margin: 0 auto; max-width: 1180px; padding: 32px 20px;
          font: 15px/1.5 system-ui, sans-serif; color: #222; }
   h1 { font-size: 20px; margin: 0 0 20px; }
-  input { width: 100%; padding: 10px 12px; font-size: 15px;
+  input { width: 100%; max-width: 640px; padding: 10px 12px; font-size: 15px;
           border: 1px solid #ccc; border-radius: 6px; }
   input:focus { outline: 2px solid #2563eb; border-color: #2563eb; }
-  #results { border: 1px solid #ddd; border-top: 0; margin-top: -1px;
+  #results { border: 1px solid #ddd; border-top: 0; margin-top: -1px; max-width: 640px;
              max-height: 300px; overflow-y: auto; display: none; }
   #results.show { display: block; }
   #results div { padding: 8px 12px; cursor: pointer; border-top: 1px solid #eee; }
@@ -32,7 +32,10 @@
   table { width: 100%; border-collapse: collapse; font-size: 14px; display: none; }
   table.show { display: table; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
-  th { color: #777; font-size: 12px; font-weight: 600; }
+  th { color: #0f172a; font-size: 13.5px; font-weight: 700; background: #eef2f7;
+       border-bottom: 2px solid #94a3b8; padding: 10px 10px; white-space: nowrap; }
+  tr.totrow td { background: #f1f5f9; font-weight: 700; font-size: 14.5px;
+                 border-top: 2px solid #94a3b8; padding: 11px 10px; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr.branch { cursor: pointer; }
   tr.branch:hover td { background: #f7f9ff; }
@@ -42,7 +45,13 @@
   tr.sinprecio td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
   tr.conjunto td { background: #ede9fe; }
   tr.conjunto td:first-child { box-shadow: inset 3px 0 0 #7c3aed; }
+  tr.noesc td { background: #dbeafe; }
+  tr.noesc td:first-child { box-shadow: inset 3px 0 0 #2563eb; }
+  tr.notiempo td { background: #dbeafe; }
+  tr.notiempo td:first-child { box-shadow: inset 3px 0 0 #2563eb; }
+  .tblwrap { overflow-x: auto; }
   .badge-c { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #ede9fe; color: #6d28d9; }
+  .badge-s { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; }
   .arrow { display: inline-block; width: 12px; color: #999; font-size: 11px; }
   .arrow.leaf { color: transparent; }
 
@@ -58,7 +67,7 @@
   .alert .d { font-size: 12.5px; color: #444; }
   tr.flash td { animation: flash 1.4s ease; }
   @keyframes flash { 0%, 45% { background: #fca5a5; } 100% { background: transparent; } }
-  @media (max-width: 1320px) { .alert { position: static; width: auto; max-height: none; margin: 12px 0; } }
+  @media (max-width: 1560px) { .alert { position: static; width: auto; max-height: none; margin: 12px 0; } }
 </style>
 </head>
 <body>
@@ -72,19 +81,22 @@
   <div id="head">
     <b id="title"></b><span id="meta"></span>
     <button id="dl">Descargar Excel</button>
+    <button id="dlesc" class="ghost">Escandallo</button>
   </div>
   <div id="tools">
     <button class="ghost" id="expand">Desplegar todo</button>
     <button class="ghost" id="collapse">Plegar todo</button>
   </div>
+  <div class="tblwrap">
   <table id="tbl">
     <thead><tr>
       <th>Nivel</th><th>Componente</th><th>IdArticulo</th>
       <th class="num">Cant</th><th>Ud</th><th>Tipo</th>
-      <th class="num">Precio €</th><th class="num">Coste €</th>
+      <th class="num">Precio €</th><th class="num">Tiempo min</th><th class="num">Coste op €</th><th class="num">Coste total €</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
+  </div>
 
   <div id="alert" class="alert"></div>
 
@@ -128,40 +140,46 @@ async function cargar(codigo, desc) {
     document.getElementById('meta').textContent = 'Sin despiece';
     tbl.classList.remove('show'); tools.classList.remove('show'); return;
   }
-  const sum = tipo => data.filas.filter(f => f.TipoCompra === tipo).reduce((a, f) => a + (f.Coste || 0), 0);
   document.getElementById('meta').innerHTML =
     data.lineas + ' líneas · ' + data.niveles + ' niveles &nbsp;·&nbsp; '
-    + 'materia prima <b>' + eur(sum('MATERIA PRIMA')) + ' €</b> · mercadería <b>' + eur(sum('MERCADERIA')) + ' €</b> · '
+    + 'material <b>' + eur(data.coste_material) + ' €</b> · operación <b>' + eur(data.coste_operacion) + ' €</b> · '
     + 'total <b>' + eur(data.coste_total) + ' €</b>'
     + (data.sin_precio ? ' · ⚠ ' + data.sin_precio + ' sin precio' : '');
 
   // aplanar el arbol en filas (orden pre-order) con profundidad y parentesco
   rows = []; byId = {}; collapsed.clear();
-  const holes = {}, deConj = {};
+  const holes = {}, sinEsc = {}, deConj = {}, sinTiempo = {};
   let idc = 0;
+  const bump = (bag, n, id) => (bag[n.id] || (bag[n.id] = { id: n.id, nombre: n.nombre, tipo: n.tipo, rowId: id, veces: 0 })).veces++;
   (function flat(nodes, depth, parent) {
     for (const n of nodes) {
       const id = idc++;
       const kids = n.hijos && n.hijos.length;
       rows.push(byId[id] = { _id: id, _parent: parent, _depth: depth, _kids: !!kids, n });
-      if (kids) { collapsed.add(id); flat(n.hijos, depth + 1, id); }   // arranca plegado
-      else if (n.de_conjunto) {                                        // hoja que viene de un conjunto
-        (deConj[n.id] || (deConj[n.id] = { id: n.id, nombre: n.nombre, rowId: id, veces: 0 })).veces++;
-      } else if (!(n.coste_total > 0) || !n.tipo) {                    // hoja sin coste/sin tipo
-        (holes[n.id] || (holes[n.id] = { id: n.id, nombre: n.nombre, tipo: n.tipo, rowId: id, veces: 0 })).veces++;
+      if (kids) {                                                      // rama = pieza fabricada
+        collapsed.add(id); flat(n.hijos, depth + 1, id);
+        if (n.sin_tiempo) bump(sinTiempo, n, id);                      // fabricada sin tiempo de bono
       }
+      else if (n.de_conjunto) bump(deConj, n, id);                     // pieza de conjunto
+      else if (n.sin_escandallo) bump(sinEsc, n, id);                  // pieza fabricada sin fase activa
+      else if (!(n.coste_total > 0) || !n.tipo) bump(holes, n, id);    // hoja sin coste/sin tipo
     }
   })(data.arbol.hijos.length ? data.arbol.hijos : [data.arbol], 0, null);
 
-  tbody.innerHTML = rows.map(renderRow).join('');
+  tbody.innerHTML = rows.map(renderRow).join('')
+    + `<tr class="totrow">
+        <td colspan="8" style="text-align:right">TOTAL &nbsp;·&nbsp; material ${eur(data.coste_material)} € · operación ${eur(data.coste_operacion)} €</td>
+        <td class="num">${eur(data.coste_operacion)}</td>
+        <td class="num">${eur(data.coste_total)} €</td>
+      </tr>`;
   tbl.classList.add('show'); tools.classList.add('show');
   refresh();
-  renderAlert(Object.values(holes), Object.values(deConj));
+  renderAlert(Object.values(holes), Object.values(sinEsc), Object.values(deConj), Object.values(sinTiempo));
 }
 
-function renderAlert(holes, deConj) {
+function renderAlert(holes, sinEsc, deConj, sinTiempo) {
   const el = document.getElementById('alert');
-  if (!holes.length && !deConj.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  if (!holes.length && !sinEsc.length && !deConj.length && !sinTiempo.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
   const item = (x, badge) => `<div class="it" data-row="${x.rowId}">
       <span class="c">${x.id}</span> ${badge}
       ${x.veces > 1 ? '<span class="b" style="background:#f3f4f6;color:#666">×' + x.veces + '</span>' : ''}
@@ -169,6 +187,10 @@ function renderAlert(holes, deConj) {
   let html = '';
   if (holes.length) html += '<h3>⚠ Sin coste · ' + holes.length + '</h3>'
     + holes.map(x => item(x, `<span class="b">${x.tipo ? 'sin precio' : 'sin tipo'}</span>`)).join('');
+  if (sinTiempo.length) html += '<h3 style="color:#1d4ed8;margin-top:14px">◷ Sin tiempo de operación · ' + sinTiempo.length + '</h3>'
+    + sinTiempo.map(x => item(x, '<span class="b" style="background:#dbeafe;color:#1d4ed8">sin tiempo</span>')).join('');
+  if (sinEsc.length) html += '<h3 style="color:#1d4ed8;margin-top:14px">◆ Sin escandallo · ' + sinEsc.length + '</h3>'
+    + sinEsc.map(x => item(x, '<span class="badge-s">sin escandallo</span>')).join('');
   if (deConj.length) html += '<h3 style="color:#6d28d9;margin-top:14px">◆ De conjunto · ' + deConj.length + '</h3>'
     + deConj.map(x => item(x, '<span class="badge-c">conjunto</span>')).join('');
   el.innerHTML = html;
@@ -190,22 +212,31 @@ function reveal(id) {
 
 function renderRow(r) {
   const n = r.n, hoja = !r._kids;
-  const cls = !hoja ? 'branch'
+  const cls = !hoja ? ('branch' + (n.sin_tiempo ? ' notiempo' : ''))
     : n.de_conjunto ? 'conjunto'
+    : n.sin_escandallo ? 'noesc'
     : (n.coste_total > 0 && n.tipo) ? 'mp' : 'sinprecio';
   const arrow = r._kids ? '▸' : '•';
-  const coste = n.coste_total || 0;
-  const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>' : esc(n.tipo || '');
+  const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>'
+    : n.sin_escandallo ? '<span class="badge-s">sin escandallo</span>'
+    : !hoja ? '<span style="color:#888;font-size:12px">fabricado</span>'
+    : esc(n.tipo || '');
+  // celda de tiempo: min de operación (ramas); aviso si es fabricado sin tiempo
+  const tiempoCell = hoja ? '' : (n.sin_tiempo
+      ? '<span style="color:#2563eb;font-size:11px">sin tiempo</span>'
+      : (n.tiempo != null ? t2(n.tiempo) : ''));
   return `<tr id="r${r._id}" class="${cls}" data-id="${r._id}">
     <td>${r._depth}</td>
     <td class="name" style="padding-left:${6 + r._depth * 16}px">
       <span class="arrow ${r._kids ? '' : 'leaf'}">${arrow}</span>${esc(n.nombre || '')}</td>
     <td class="code">${n.id}</td>
-    <td class="num">${hoja ? fmt(n.cant) : ''}</td>
-    <td>${hoja ? esc(n.unidad || '') : ''}</td>
+    <td class="num">${fmt(n.cant)}</td>
+    <td>${esc(n.unidad || '')}</td>
     <td>${tipoCell}</td>
-    <td class="num">${hoja ? eur(n.precio) : ''}</td>
-    <td class="num">${eur(coste)}</td>
+    <td class="num">${hoja ? (eur(n.precio) + (n.fuente === 'lista' ? ' <span style="color:#7c3aed;font-size:10px">lista</span>' : '')) : ''}</td>
+    <td class="num">${tiempoCell}</td>
+    <td class="num">${!hoja ? eur(n.coste_op) : ''}</td>
+    <td class="num">${eur(n.coste_total)}</td>
   </tr>`;
 }
 
@@ -238,7 +269,11 @@ document.getElementById('collapse').addEventListener('click', () => {
 document.getElementById('dl').addEventListener('click', () => {
   if (current) window.location = '/api/excel?codigo=' + encodeURIComponent(current);
 });
+document.getElementById('dlesc').addEventListener('click', () => {
+  if (current) window.location = '/api/escandallo?codigo=' + encodeURIComponent(current);
+});
 const fmt = n => (n==null ? '' : (+n).toLocaleString('es-ES', {maximumFractionDigits: 6}));
+const t2  = n => (n==null ? '' : (+n).toLocaleString('es-ES', {maximumFractionDigits: 2}));
 const eur = n => (n==null ? '' : (+n).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 </script>
