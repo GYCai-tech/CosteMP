@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Coste-MP · Despiece</title>
+<title>Costes Artículo</title>
 <style>
   body { margin: 0 auto; max-width: 1180px; padding: 32px 20px;
          font: 15px/1.5 system-ui, sans-serif; color: #222; }
@@ -11,11 +11,6 @@
   input { width: 100%; max-width: 640px; padding: 10px 12px; font-size: 15px;
           border: 1px solid #ccc; border-radius: 6px; }
   input:focus { outline: 2px solid #2563eb; border-color: #2563eb; }
-  #chkbajas { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 0;
-              font-size: 13px; color: #555; cursor: pointer; user-select: none; }
-  #chkbajas input { width: auto; margin: 0; cursor: pointer; }
-  .baja { background: #fee2e2; color: #991b1b; font-size: 10px; font-weight: 600;
-          padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
   #results { border: 1px solid #ddd; border-top: 0; margin-top: -1px; max-width: 640px;
              max-height: 300px; overflow-y: auto; display: none; }
   #results.show { display: block; }
@@ -78,14 +73,11 @@
 </style>
 </head>
 <body>
-  <h1>Coste-MP · Despiece de artículos
+  <h1>Costes Artículo
     <a href="/lote" style="float:right;font-size:13px;font-weight:400;color:#2563eb;text-decoration:none">Coste por lote →</a>
   </h1>
 
   <input id="q" type="text" placeholder="Busca por código o descripción…" autocomplete="off">
-  <label id="chkbajas" title="Los descatalogados son artículos dados de baja en el ERP (Estado = 1)">
-    <input id="bajas" type="checkbox"> Incluir descatalogados
-  </label>
   <div id="results"></div>
 
   <div id="head">
@@ -113,7 +105,6 @@
 
 <script>
 const q = document.getElementById('q'), results = document.getElementById('results');
-const bajas = document.getElementById('bajas');
 const head = document.getElementById('head'), tools = document.getElementById('tools');
 const tbl = document.getElementById('tbl'), tbody = document.getElementById('tbody');
 let timer = null, current = null;
@@ -125,22 +116,15 @@ q.addEventListener('input', () => {
   if (q.value.trim().length < 2) return results.classList.remove('show');
   timer = setTimeout(buscar, 220);
 });
-bajas.addEventListener('change', () => {
-  if (q.value.trim().length >= 2) buscar();
-});
 document.addEventListener('click', e => {
-  if (!results.contains(e.target) && e.target !== q && !chkbajas.contains(e.target))
-    results.classList.remove('show');
+  if (!results.contains(e.target) && e.target !== q) results.classList.remove('show');
 });
 
 async function buscar() {
-  const url = '/api/buscar?q=' + encodeURIComponent(q.value.trim())
-            + (bajas.checked ? '&bajas=1' : '');
-  const data = await (await fetch(url)).json();
+  const data = await (await fetch('/api/buscar?q=' + encodeURIComponent(q.value.trim()))).json();
   results.innerHTML = data.length
     ? data.map(a => `<div data-c="${a.IdArticulo}" data-d="${esc(a.Descrip||'')}">
-        <span class="code">${a.IdArticulo}</span> — ${esc(a.Descrip||'')}${
-        a.Baja ? ' <span class="baja">de baja</span>' : ''}</div>`).join('')
+        <span class="code">${a.IdArticulo}</span> — ${esc(a.Descrip||'')}</div>`).join('')
     : '<div style="color:#999">Sin resultados</div>';
   results.querySelectorAll('div[data-c]').forEach(el =>
     el.addEventListener('click', () => cargar(el.dataset.c, el.dataset.d)));

@@ -1,4 +1,4 @@
-# Coste-MP — imagen con ODBC Driver 18 for SQL Server (necesario para pyodbc)
+# Costes Artículo — imagen con ODBC Driver 18 for SQL Server (necesario para pyodbc)
 FROM python:3.12-slim
 
 # --- Microsoft ODBC Driver 18 (Debian 12 / bookworm) ---

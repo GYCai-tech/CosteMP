@@ -111,9 +111,8 @@ def api_buscar():
     q = request.args.get("q", "")
     if len(q.strip()) < 2:
         return jsonify([])
-    # bajas=1 -> incluye tambien los articulos descatalogados (Estado = 1)
-    incluir_bajas = request.args.get("bajas", "") in ("1", "true", "si")
-    df = buscar_articulos(q, incluir_bajas=incluir_bajas)
+    # solo articulos activos: los descatalogados (Estado = 1) no se buscan
+    df = buscar_articulos(q)
     return jsonify(_records(df))
 
 

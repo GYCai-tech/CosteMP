@@ -239,7 +239,6 @@ SQL_BUSCAR = text("""
 SELECT TOP (:limite)
     a.IdArticulo,
     a.Descrip,
-    a.Estado AS Baja,                          -- 1 = descatalogado
     CASE WHEN EXISTS (
         SELECT 1 FROM dbo.Fases_Salidas fs
         INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
@@ -249,21 +248,18 @@ SELECT TOP (:limite)
     ) THEN 1 ELSE 0 END AS Fabricable
 FROM dbo.Articulos a
 WHERE (a.IdArticulo LIKE :q OR a.Descrip LIKE :q)
-  AND (:incluir_bajas = 1 OR a.Estado = 0)     -- por defecto oculta los de baja
+  AND a.Estado = 0                             -- solo activos: los de baja no se buscan
 ORDER BY Fabricable DESC, a.IdArticulo
 """)
 
 
-def buscar_articulos(q: str, limite: int = 50, incluir_bajas: bool = False) -> pd.DataFrame:
-    """Busca articulos por codigo o descripcion. Los fabricables van primero.
-
-    Por defecto solo devuelve articulos ACTIVOS (Estado = 0); con incluir_bajas=True
-    tambien salen los descatalogados, marcados con la columna Baja."""
+def buscar_articulos(q: str, limite: int = 50) -> pd.DataFrame:
+    """Busca articulos ACTIVOS por codigo o descripcion. Los fabricables van
+    primero. Los descatalogados (Estado = 1) no se devuelven nunca."""
     q = (q or "").strip()
     limite = max(1, min(int(limite), 200))
     with get_engine().connect() as cn:
-        return pd.read_sql(SQL_BUSCAR, cn, params={"q": f"%{q}%", "limite": limite,
-                                                   "incluir_bajas": 1 if incluir_bajas else 0})
+        return pd.read_sql(SQL_BUSCAR, cn, params={"q": f"%{q}%", "limite": limite})
 
 
 SQL_NOMBRE = text("SELECT Descrip FROM dbo.Articulos WHERE IdArticulo = :codigo")

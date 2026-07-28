@@ -1,4 +1,4 @@
-# Coste-MP — Despiece de materiales del ERP
+# Costes Artículo — Despiece de materiales del ERP
 
 Genera el **despiece (lista de materiales) multinivel** de un artículo del ERP
 GÓMEZ Y CRESPO (SQL Server `GOMEZYCRESPO`) y lo exporta a Excel.
