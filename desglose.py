@@ -33,15 +33,20 @@ from db import get_engine
 #     servicio subcontratado y SI se suma al de sus propios materiales.
 SQL = text("""
 WITH
--- Precio de compra por articulo: UNICAMENTE el ULTIMO ALBARAN con precio real
--- (Pedidos_Prov_Lineas, la compra mas reciente), con su descuento.
+-- Precio de compra por articulo, con prioridad:
+--   1) ULTIMO ALBARAN con precio real (Pedidos_Prov_Lineas, la compra mas reciente).
+--   2) FALLBACK: TARIFA del proveedor (Listas_Precios_Prov_Art), solo si no hay albaran.
 --
--- NO se usa la lista de precios de proveedor (Listas_Precios_Prov_Art) como
--- fallback: una tarifa es lo que el proveedor PIDE, no lo que se ha pagado.
--- Costear con ella mete importes que nadie ha desembolsado y que ademas pueden
--- estar en otra unidad que el albaran (p.ej. cordon a 0,026 EUR/m en tarifa
--- frente a 24,79 EUR/rollo en albaran). Si no hay compra, no hay coste: la
--- linea sale marcada como "sin precio" para que se vea el hueco.
+-- La tarifa es lo que el proveedor PIDE, no lo que se ha pagado, asi que manda
+-- siempre el albaran. Pero la lista de precios es un canal vivo: el equipo la
+-- mantiene a diario (429 cambios en 2026, 5 usuarios), y hay articulos que solo
+-- tienen precio ahi. Ignorarla dejaba a cero cosas con precio recien puesto.
+-- Toda linea valorada por tarifa se marca con Fuente='lista' y sale señalada en
+-- pantalla, para no confundir un precio de catalogo con una compra real.
+--
+-- OJO: tarifa y albaran pueden venir en UNIDADES distintas (p.ej. cordon a
+-- 0,026 EUR/m en tarifa frente a 24,79 EUR/rollo en albaran). Al revisar un
+-- precio que venga de lista, comprobar la unidad.
 precio AS (
     SELECT IdArticulo, Precio, Descuento, 'albaran' AS Fuente FROM (
         SELECT IdArticulo, Precio_EURO AS Precio, Descuento,
@@ -51,6 +56,21 @@ precio AS (
         WHERE FechaAlbaran IS NOT NULL AND Precio_EURO > 0
     ) t
     WHERE rn = 1
+
+    UNION ALL
+
+    -- de la tarifa se coge el precio MAS RECIENTE (por FechaInsertUpdate)
+    SELECT IdArticulo, Precio, 0 AS Descuento, 'lista' AS Fuente FROM (
+        SELECT lp.IdArticulo, lp.Precio,
+               ROW_NUMBER() OVER (PARTITION BY lp.IdArticulo
+                                  ORDER BY lp.FechaInsertUpdate DESC, lp.IdLista DESC) AS rn
+        FROM dbo.Listas_Precios_Prov_Art lp
+        WHERE lp.Precio > 0
+          AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl
+                          WHERE pl.IdArticulo = lp.IdArticulo
+                            AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0)
+    ) t
+    WHERE t.rn = 1
 ),
 -- Tiempo de operacion (min/pieza) por articulo: media de los bonos de produccion
 -- (TotalMinutos/TotalPiezas) con fase activa. Es la base del coste de mano de obra.
@@ -188,17 +208,17 @@ SELECT
     m.CantConv AS Cant,
     m.Unidad,
     t.Descrip AS TipoCompra,                       -- MATERIA PRIMA / MERCADERIA / ...
-    -- Precio = ultimo ALBARAN de compra, solo en las filas valorables
-    -- (ver EsValorable en 'marcado'). Nunca tarifa.
+    -- Precio: ultimo ALBARAN, o TARIFA si no hay ninguna compra. Solo en las
+    -- filas valorables (ver EsValorable en 'marcado').
     CASE WHEN m.EsValorable = 1 THEN p.Precio END    AS PrecioCompra,
     CASE WHEN m.EsValorable = 1 THEN p.Descuento END AS Descuento,
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL
-         THEN p.Fuente END AS PrecioFuente,       -- siempre 'albaran'
+         THEN p.Fuente END AS PrecioFuente,       -- 'albaran' o 'lista' (tarifa)
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL
          THEN m.CantConv * (p.Precio - p.Precio * COALESCE(p.Descuento, 0) / 100.0)
     END AS Coste,
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NOT NULL THEN 1 ELSE 0 END AS Valorado,
-    -- valorable pero SIN albaran de compra: hueco de coste real, hay que verlo
+    -- valorable pero sin precio en ninguna fuente: hueco de coste real
     CASE WHEN m.EsValorable = 1 AND p.Precio IS NULL
          THEN 1 ELSE 0 END AS SinPrecio,
     -- 1 si es una PIEZA FABRICADA (tiene fases) sin escandallo ACTIVO para
@@ -494,6 +514,10 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
             "Ud": n.get("unidad"),
             "Tipo": tipo_txt,
             "Precio €": n.get("precio") if hoja else None,
+            # de donde sale el precio: una compra real o la tarifa del proveedor
+            "Origen precio": ("tarifa" if n.get("fuente") == "lista"
+                              else "albarán" if n.get("fuente") == "albaran"
+                              else None) if hoja else None,
             "Coste MP €": n.get("coste") if hoja else None,
             "Tiempo min": (None if hoja else n.get("tiempo")),
             "Coste operación €": (None if hoja else n.get("coste_op")),
@@ -503,7 +527,8 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
 
     coste_mat = arbol["coste_mat"]; coste_op = arbol["coste_op_total"]; coste_tot = arbol["coste_total"]
     reg.append({"Nivel": None, "Componente": "TOTAL", "IdArticulo": "", "Cant": None,
-                "Ud": "", "Tipo": "", "Precio €": None, "Coste MP €": coste_mat,
+                "Ud": "", "Tipo": "", "Precio €": None, "Origen precio": "",
+                "Coste MP €": coste_mat,
                 "Tiempo min": None, "Coste operación €": coste_op, "Coste total €": coste_tot})
     cats.append("total")
     desg = pd.DataFrame(reg)
