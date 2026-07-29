@@ -98,15 +98,20 @@ tiempo_op AS (
 -- todos sus trabajos tienen OrdenTrabajo = 0 (los "Sin operacion" del ERP).
 -- La fase existe solo para llevar los materiales. Que no tengan tiempo NO es
 -- un hueco de datos, es lo correcto: no hay mano de obra que imputar.
--- Se exige que NO haya ningun trabajo con OrdenTrabajo = 1 (hay fases mixtas).
+-- Se exige que NO haya ningun trabajo con OrdenTrabajo = 1 (seguro por si
+-- aparecen fases mixtas; hoy no hay ninguna en la base).
 --
--- OrdenTrabajo = 0 NO BASTA. De sus 249 filas, 51 son operaciones de verdad
--- (Lacar x16, Cortar x8, Soldar x5, Punzonar, Inyectar, Estampar...) a las que
--- simplemente no se les marco la casilla. Dandolas por "sin operacion" se les
--- borraba la mano de obra Y ADEMAS se les quitaba el aviso: 29 articulos salian
--- a 0 EUR de operacion en silencio. Asi que se exige tambien que el trabajo se
--- LLAME "sin operacion" (con sus erratas: "Sín operación", "Sin poeración",
--- "sin operaion", "Sin fase", "no fase"). Lo dudoso se deja fuera y avisa.
+-- LA CASILLA OrdenTrabajo ES EL UNICO CRITERIO. Es el campo que produccion
+-- repasa en el ERP, asi que manda lo que diga: para quitar el aviso de una
+-- pieza que no lleva mano de obra, basta con desmarcarla ahi.
+--
+-- Antes se exigia ademas que el trabajo se LLAMASE "sin operacion". Eso dejaba
+-- fuera 31 articulos con la casilla desmarcada pero nombre de operacion real
+-- (Lacar x16, Cortar, Soldar, Punzonar, Inyectar, Estampar...), que salian
+-- avisados como "sin tiempo". Ahora entran aqui y pasan a 0 EUR de mano de
+-- obra EN SILENCIO. Es intencionado: el aviso se sustituye por el repaso
+-- manual del ERP. Si aparece un 0 EUR de operacion sin explicacion, mirar
+-- aqui primero.
 sin_operacion AS (
     SELECT DISTINCT fs.IdArticulo
     FROM dbo.Fases_Salidas fs
@@ -115,10 +120,6 @@ sin_operacion AS (
                   WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 0)
       AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
                       WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
-      AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
-                      WHERE tf.IdFase = fs.IdFase
-                        AND NOT (tf.Descrip LIKE 'sin%' OR tf.Descrip LIKE 'sín%'
-                                 OR tf.Descrip LIKE 'no fase%'))
 ),
 -- Componentes de cada articulo, unificando las dos vias de escandallo.
 componentes AS (
@@ -338,15 +339,12 @@ SELECT CASE WHEN EXISTS (
     SELECT 1 FROM dbo.Fases_Salidas fs
     INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
     WHERE fs.IdArticulo = :codigo
+      -- mismo criterio que el CTE sin_operacion (ver su comentario): manda
+      -- la casilla OrdenTrabajo y nada mas
       AND EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
                   WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 0)
       AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
                       WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
-      -- mismo criterio de texto que el CTE sin_operacion (ver su comentario)
-      AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
-                      WHERE tf.IdFase = fs.IdFase
-                        AND NOT (tf.Descrip LIKE 'sin%' OR tf.Descrip LIKE 'sín%'
-                                 OR tf.Descrip LIKE 'no fase%'))
 ) THEN 1 ELSE 0 END
 """)
 
