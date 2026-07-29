@@ -14,7 +14,7 @@ from flask import Flask, request, jsonify, send_file, render_template
 
 from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_excel,
                       tiempo_operacion, escandallo_directo, sin_operacion,
-                      servicio_externo)
+                      coste_propio)
 
 app = Flask(__name__)
 
@@ -126,7 +126,7 @@ def api_desglose():
     codigo = request.args.get("codigo", "")
     df = desglose(codigo)
     arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_operacion(codigo),
-                             sin_operacion(codigo), servicio_externo(codigo))
+                             sin_operacion(codigo), coste_propio(codigo))
              if not df.empty else None)
     return jsonify({
         "codigo": codigo,
@@ -228,7 +228,7 @@ def resumen_lote(codigo):
         return fila, []
 
     arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo),
-                            servicio_externo(codigo))
+                            coste_propio(codigo))
     coste_mat = arbol["coste_mat"] if arbol else 0.0
     coste_op = arbol["coste_op_total"] if arbol else 0.0
     coste_tot = arbol["coste_total"] if arbol else 0.0

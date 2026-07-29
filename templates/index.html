@@ -227,9 +227,9 @@ function renderRow(r) {
   const arrow = r._kids ? '▸' : '•';
   const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>'
     : n.sin_escandallo ? '<span class="badge-s">sin escandallo</span>'
-    // el artículo buscado puede llevar un trabajo externo propio (lacado,
-    // zincado...) que se suma al coste de sus materiales
-    : n.servicio != null ? '<span class="badge-t">trabajo externo</span>'
+    // el artículo buscado puede llevar un trabajo propio (lacado, zincado,
+    // remachado...) que se suma al coste de sus materiales
+    : n.servicio != null ? '<span class="badge-t">trabajo sobre la pieza</span>'
     : !hoja ? '<span style="color:#888;font-size:12px">fabricado</span>'
     // compra valorada por albarán a la que le falta el tipo en el ERP
     : !n.tipo && n.precio != null ? '<span class="badge-t">compra sin tipo</span>'

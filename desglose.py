@@ -24,13 +24,15 @@ from db import get_engine
 #       (2) CONJUNTO (Articulos_Conjuntos) -> SOLO si el articulo no tiene fase activa.
 #     Un conjunto sin fase se explota por sus componentes x Unidades (misma logica
 #     recursiva que las fases). Prioridad: si hay fase activa manda la fase.
-#   - se valora a ultimo precio de compra cada articulo con IdTipoAprovisionamiento
-#     (=se compra) que sea HOJA del arbol, y se clasifica por su tipo (MATERIA PRIMA /
-#     MERCADERIA / ...). Si el articulo TIENE escandallo no se valora a precio: su
-#     coste sale de explotar sus componentes; valorarlo ademas a precio lo contaria
-#     dos veces (caso COMEDERO 2B MIXTO, tipo ALMACEN con compras historicas).
-#     UNICA EXCEPCION: TRABAJOS EXTERNOS (tipo 5), donde el precio es el coste del
-#     servicio subcontratado y SI se suma al de sus propios materiales.
+#   - se valora a ultimo precio de compra cada articulo HOJA del arbol, y se
+#     clasifica por su tipo (MATERIA PRIMA / MERCADERIA / ...).
+#   - un articulo que TIENE escandallo Y ADEMAS se compra tambien se valora, y su
+#     precio se SUMA al de sus componentes: esa compra es el trabajo que se le
+#     hace encima (lacado, zincado, remachado). El CUENCO LACADO 18104023 cuesta
+#     6,50 de cuenco en bruto + 1,05 de lacado = 7,55.
+#     SALVAVIDAS: si ese precio ya esta dentro del escandallo (un componente que
+#     cuesta lo mismo porque es el articulo comprado hecho) NO se suma, que si no
+#     se cuenta dos veces. Ver el CTE 'duplicado'.
 SQL = text("""
 WITH
 -- Precio de compra por articulo, con prioridad:
@@ -149,6 +151,24 @@ componentes AS (
                       INNER JOIN dbo.Fases f2 ON f2.IdFase = fs2.IdFase AND f2.Activa <> 0
                       WHERE fs2.IdArticulo = ac.IdArticuloPadre)
 ),
+-- Articulos cuyo PRECIO PROPIO YA ESTA DENTRO de su escandallo: alguno de sus
+-- componentes directos cuesta lo mismo que ellos, porque es el mismo articulo
+-- comprado hecho (BEBEDERO DT20 91,00 lleva dentro "BEBEDERO DT20 ... comprado"
+-- a 91,00; ABREVADERO 78,00 lleva "ABREVADERO ... (comprado)" a 78,00).
+-- Ahi el precio propio y el escandallo describen LO MISMO por dos caminos, y
+-- sumarlos duplica: el bebedero pasaria de 91 a 182 EUR.
+--
+-- Son 6 en toda la base (CUADRO ROBOT, BEBEDERO DT20, ABREVADERO, COMEDERO
+-- ESQUINA, BOTELLA GYC, TOLVA DE PLASTICO). Los otros 58 llevan dentro la pieza
+-- EN BRUTO, no el articulo terminado, y su precio propio es trabajo anadido
+-- (lacado, zincado, remachado...) que SI hay que sumar.
+duplicado AS (
+    SELECT DISTINCT c.Padre AS IdArticulo
+    FROM componentes c
+    INNER JOIN precio ph ON ph.IdArticulo = c.Hijo
+    INNER JOIN precio pp ON pp.IdArticulo = c.Padre
+    WHERE ABS(ph.Precio - pp.Precio) <= 0.02 * ABS(pp.Precio)
+),
 desglose AS (
     -- NIVEL 0: componentes directos del articulo (por fase o por conjunto)
     SELECT
@@ -211,13 +231,19 @@ marcado AS (
         --      en silencio. Las piezas con fases desactivadas quedan fuera a
         --      proposito: esas siguen avisando como "sin escandallo".
         CASE WHEN a2.IdTipoAprovisionamiento IS NOT NULL
-                  AND (a2.IdTipoAprovisionamiento = 5
-                       OR NOT EXISTS (SELECT 1 FROM componentes c3 WHERE c3.Padre = d.IdArticulo))
+                  AND NOT EXISTS (SELECT 1 FROM componentes c3 WHERE c3.Padre = d.IdArticulo)
              THEN 1
              WHEN a2.IdTipoAprovisionamiento IS NULL
                   AND NOT EXISTS (SELECT 1 FROM componentes c4 WHERE c4.Padre = d.IdArticulo)
                   AND NOT EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs3
                                   WHERE fs3.IdArticulo = d.IdArticulo)
+             THEN 1
+             -- (c) TIENE escandallo pero ADEMAS se compra: esa compra es el
+             --     trabajo que se le hace encima (lacado, zincado, remachado),
+             --     asi que se suma a sus componentes. Salvo que el precio ya
+             --     este dentro del escandallo (ver CTE 'duplicado').
+             WHEN EXISTS (SELECT 1 FROM componentes c5 WHERE c5.Padre = d.IdArticulo)
+                  AND NOT EXISTS (SELECT 1 FROM duplicado dp WHERE dp.IdArticulo = d.IdArticulo)
              THEN 1
              ELSE 0 END AS EsValorable
     FROM desglose d
@@ -358,8 +384,10 @@ def sin_operacion(codigo: str) -> int:
     return int(r[0]) if r else 0
 
 
-# Precio del SERVICIO subcontratado del propio articulo buscado, cuando es
-# TRABAJO EXTERNO (tipo 5) Y ADEMAS tiene escandallo.
+# Precio de compra DEL PROPIO ARTICULO buscado cuando ademas tiene escandallo:
+# es el trabajo que se le hace encima (lacado, zincado, remachado...) y se suma
+# al coste de sus componentes. Mismo criterio que la rama (c) de EsValorable,
+# incluido el salvavidas del CTE 'duplicado'.
 #
 # El CTE de arriba solo emite una fila para el propio articulo si NO tiene
 # escandallo (ver "NIVEL 0 alternativo"). Con escandallo, la raiz nunca aparece
@@ -371,8 +399,12 @@ def sin_operacion(codigo: str) -> int:
 #
 # Misma prioridad de fuentes que el CTE 'precio': ultimo ALBARAN, y TARIFA solo
 # si no hay ninguna compra (excluyendo la lista del "Proveedor 0").
+# OJO con el orden: el freno se aplica AL PRECIO YA ELEGIDO, no a cada candidato.
+# Filtrando candidato a candidato, al descartar el precio bueno de 15101013
+# (91,00, que coincide con su componente) el TOP 1 se quedaba con un albaran
+# viejo de 72,35 que no coincidia, y lo sumaba igual: 163,80 EUR en vez de 91,45.
 SQL_SERVICIO_EXTERNO = text("""
-SELECT TOP 1 Precio FROM (
+WITH candidatos AS (
     SELECT pl.Precio_EURO - pl.Precio_EURO * COALESCE(pl.Descuento, 0) / 100.0 AS Precio,
            1 AS Prioridad, pl.FechaAlbaran AS Fecha, pl.IdPedido AS Desempate
     FROM dbo.Pedidos_Prov_Lineas pl
@@ -389,19 +421,46 @@ SELECT TOP 1 Precio FROM (
       AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl2
                       WHERE pl2.IdArticulo = :codigo
                         AND pl2.FechaAlbaran IS NOT NULL AND pl2.Precio_EURO > 0)
-) t
-WHERE EXISTS (SELECT 1 FROM dbo.Articulos a
-              WHERE a.IdArticulo = :codigo AND a.IdTipoAprovisionamiento = 5)
-  AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs
+),
+elegido AS (
+    SELECT TOP 1 Precio FROM candidatos
+    ORDER BY Prioridad, Fecha DESC, Desempate DESC
+)
+SELECT e.Precio FROM elegido e
+-- solo si TIENE escandallo (si no, el CTE ya lo valora por la rama "NIVEL 0
+-- alternativo" y sumarlo aqui lo contaria dos veces)
+-- (la fase tiene que traer COMPONENTES: si esta vacia, el CTE ya valora el
+--  articulo por su cuenta y esto sobraria)
+WHERE EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs
               INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
+              INNER JOIN dbo.Fases_Entradas fe ON fe.IdFase = f.IdFase
               WHERE fs.IdArticulo = :codigo)
-ORDER BY t.Prioridad, t.Fecha DESC, t.Desempate DESC
+  -- freno: no sumar si ese precio YA esta dentro del escandallo
+  AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT fe.IdArticulo AS Hijo
+            FROM dbo.Fases f2
+            INNER JOIN dbo.Fases_Salidas fs2 ON fs2.IdFase = f2.IdFase AND f2.Activa <> 0
+            INNER JOIN dbo.Fases_Entradas fe ON fe.IdFase = f2.IdFase
+            WHERE fs2.IdArticulo = :codigo
+            UNION ALL
+            SELECT ac.IdArticulo FROM dbo.Articulos_Conjuntos ac
+            WHERE ac.IdArticuloPadre = :codigo
+        ) h
+        CROSS APPLY (
+            SELECT TOP 1 pl.Precio_EURO AS P
+            FROM dbo.Pedidos_Prov_Lineas pl
+            WHERE pl.IdArticulo = h.Hijo
+              AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0
+            ORDER BY pl.FechaAlbaran DESC, pl.IdPedido DESC
+        ) x
+        WHERE ABS(x.P - e.Precio) <= 0.02 * ABS(e.Precio))
 """)
 
 
-def servicio_externo(codigo: str):
-    """Coste del servicio subcontratado del propio articulo (trabajo externo con
-    escandallo). None si no aplica. Se suma al coste de sus materiales."""
+def coste_propio(codigo: str):
+    """Precio de compra del propio articulo buscado cuando tiene escandallo: el
+    trabajo que se le hace encima. None si no aplica. Se suma a sus materiales."""
     codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
     with get_engine().connect() as cn:
         r = cn.execute(SQL_SERVICIO_EXTERNO, {"codigo": codigo}).fetchone()
@@ -573,7 +632,7 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     """Escribe el Excel (tres hojas): Desglose (arbol indentado con material y
     operacion, coloreado por categoria), Comprados y Resumen (material+operacion+total)."""
     arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo),
-                            servicio_externo(codigo))
+                            coste_propio(codigo))
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
@@ -585,7 +644,7 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
         servicio = n.get("servicio")
         tipo_txt = ("de conjunto" if n.get("de_conjunto")
                     else "sin escandallo" if n.get("sin_escandallo")
-                    else "trabajo externo" if servicio is not None
+                    else "trabajo sobre la pieza" if servicio is not None
                     else (n.get("tipo") or
                           ("" if hoja
                            else "fabricado sin operación" if n.get("sin_operacion")
