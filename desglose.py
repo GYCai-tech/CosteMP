@@ -358,6 +358,56 @@ def sin_operacion(codigo: str) -> int:
     return int(r[0]) if r else 0
 
 
+# Precio del SERVICIO subcontratado del propio articulo buscado, cuando es
+# TRABAJO EXTERNO (tipo 5) Y ADEMAS tiene escandallo.
+#
+# El CTE de arriba solo emite una fila para el propio articulo si NO tiene
+# escandallo (ver "NIVEL 0 alternativo"). Con escandallo, la raiz nunca aparece
+# como fila, asi que la excepcion de tipo 5 de EsValorable no llega a aplicarse
+# y el coste del servicio se perdia: buscar 18401007 daba 3,36 EUR (solo su
+# chapa) en vez de 3,36 + 4,59 de lacado. Como COMPONENTE de un padre si se
+# contaba bien, de modo que el mismo articulo valia distinto segun como se
+# mirase. Esto lo recupera para la raiz.
+#
+# Misma prioridad de fuentes que el CTE 'precio': ultimo ALBARAN, y TARIFA solo
+# si no hay ninguna compra (excluyendo la lista del "Proveedor 0").
+SQL_SERVICIO_EXTERNO = text("""
+SELECT TOP 1 Precio FROM (
+    SELECT pl.Precio_EURO - pl.Precio_EURO * COALESCE(pl.Descuento, 0) / 100.0 AS Precio,
+           1 AS Prioridad, pl.FechaAlbaran AS Fecha, pl.IdPedido AS Desempate
+    FROM dbo.Pedidos_Prov_Lineas pl
+    WHERE pl.IdArticulo = :codigo
+      AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0
+
+    UNION ALL
+
+    SELECT lp.Precio, 2, lp.FechaInsertUpdate, lp.IdLista
+    FROM dbo.Listas_Precios_Prov_Art lp
+    INNER JOIN dbo.Listas_Precios_Prov lc ON lc.IdLista = lp.IdLista
+                                         AND lc.IdProveedor <> '0'
+    WHERE lp.IdArticulo = :codigo AND lp.Precio > 0
+      AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl2
+                      WHERE pl2.IdArticulo = :codigo
+                        AND pl2.FechaAlbaran IS NOT NULL AND pl2.Precio_EURO > 0)
+) t
+WHERE EXISTS (SELECT 1 FROM dbo.Articulos a
+              WHERE a.IdArticulo = :codigo AND a.IdTipoAprovisionamiento = 5)
+  AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs
+              INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
+              WHERE fs.IdArticulo = :codigo)
+ORDER BY t.Prioridad, t.Fecha DESC, t.Desempate DESC
+""")
+
+
+def servicio_externo(codigo: str):
+    """Coste del servicio subcontratado del propio articulo (trabajo externo con
+    escandallo). None si no aplica. Se suma al coste de sus materiales."""
+    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
+    with get_engine().connect() as cn:
+        r = cn.execute(SQL_SERVICIO_EXTERNO, {"codigo": codigo}).fetchone()
+    return float(r[0]) if r and r[0] is not None else None
+
+
 SQL_ESCANDALLO = text("""
 SELECT TRY_CONVERT(float, fe.Cantidad) AS Cantidad,
        fe.IdArticulo,
@@ -418,13 +468,17 @@ def _s(v):
     return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
 
 
-def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0):
+def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
+                    servicio_raiz=None):
     """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
-    fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo."""
+    fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo.
+
+    servicio_raiz: coste del trabajo externo del propio articulo buscado, que
+    se suma a sus materiales (ver SQL_SERVICIO_EXTERNO)."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "fuente": None, "de_conjunto": 0, "sin_escandallo": 0,
-            "sin_operacion": int(sin_op_raiz or 0),
-            "tiempo": tiempo_raiz, "coste": 0.0, "hijos": []}
+            "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
+            "tiempo": tiempo_raiz, "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
     for r in df.sort_values("Ruta").to_dict(orient="records"):
@@ -518,15 +572,20 @@ def _resaltar_sin_precio(ws, flags, ncols):
 def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     """Escribe el Excel (tres hojas): Desglose (arbol indentado con material y
     operacion, coloreado por categoria), Comprados y Resumen (material+operacion+total)."""
-    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo))
+    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo),
+                            servicio_externo(codigo))
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
     reg, cats = [], []
     for depth, n in filas:
         hoja = not n["hijos"]
+        # el articulo raiz puede llevar ademas un trabajo externo propio, que se
+        # suma a sus materiales (ver SQL_SERVICIO_EXTERNO)
+        servicio = n.get("servicio")
         tipo_txt = ("de conjunto" if n.get("de_conjunto")
                     else "sin escandallo" if n.get("sin_escandallo")
+                    else "trabajo externo" if servicio is not None
                     else (n.get("tipo") or
                           ("" if hoja
                            else "fabricado sin operación" if n.get("sin_operacion")
@@ -538,12 +597,12 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
             "Cant": n.get("cant"),
             "Ud": n.get("unidad"),
             "Tipo": tipo_txt,
-            "Precio €": n.get("precio") if hoja else None,
+            "Precio €": n.get("precio") if hoja else servicio,
             # de donde sale el precio: una compra real o la tarifa del proveedor
             "Origen precio": ("tarifa" if n.get("fuente") == "lista"
                               else "albarán" if n.get("fuente") == "albaran"
                               else None) if hoja else None,
-            "Coste MP €": n.get("coste") if hoja else None,
+            "Coste MP €": n.get("coste") if (hoja or servicio is not None) else None,
             "Tiempo min": (None if hoja else n.get("tiempo")),
             "Coste operación €": (None if hoja else n.get("coste_op")),
             "Coste total €": n.get("coste_total"),

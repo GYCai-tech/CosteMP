@@ -13,7 +13,8 @@ from openpyxl.styles import PatternFill
 from flask import Flask, request, jsonify, send_file, render_template
 
 from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_excel,
-                      tiempo_operacion, escandallo_directo, sin_operacion)
+                      tiempo_operacion, escandallo_directo, sin_operacion,
+                      servicio_externo)
 
 app = Flask(__name__)
 
@@ -41,13 +42,17 @@ def _s(v):
 RATE_OP = 17.0 / 60.0   # 17 €/h operario -> €/min
 
 
-def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0):
+def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
+                    servicio_raiz=None):
     """Árbol del escandallo con coste de MATERIAL (hojas compradas) y de OPERACIÓN
-    (nodos fabricados = tiempo × 17 €/h), y el rollup material+operación por nodo."""
+    (nodos fabricados = tiempo × 17 €/h), y el rollup material+operación por nodo.
+
+    servicio_raiz: coste del trabajo externo del propio artículo buscado, que se
+    suma a sus materiales (ver SQL_SERVICIO_EXTERNO en desglose.py)."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "de_conjunto": 0, "sin_escandallo": 0,
-            "sin_operacion": int(sin_op_raiz or 0),
-            "tiempo": tiempo_raiz, "coste": 0.0, "hijos": []}
+            "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
+            "tiempo": tiempo_raiz, "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
     for r in df.sort_values("Ruta").to_dict(orient="records"):
@@ -121,7 +126,7 @@ def api_desglose():
     codigo = request.args.get("codigo", "")
     df = desglose(codigo)
     arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_operacion(codigo),
-                             sin_operacion(codigo))
+                             sin_operacion(codigo), servicio_externo(codigo))
              if not df.empty else None)
     return jsonify({
         "codigo": codigo,
@@ -222,7 +227,8 @@ def resumen_lote(codigo):
                 "Estado": "No encontrado / sin datos"}
         return fila, []
 
-    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo))
+    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo),
+                            servicio_externo(codigo))
     coste_mat = arbol["coste_mat"] if arbol else 0.0
     coste_op = arbol["coste_op_total"] if arbol else 0.0
     coste_tot = arbol["coste_total"] if arbol else 0.0

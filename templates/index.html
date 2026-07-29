@@ -227,6 +227,9 @@ function renderRow(r) {
   const arrow = r._kids ? '▸' : '•';
   const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>'
     : n.sin_escandallo ? '<span class="badge-s">sin escandallo</span>'
+    // el artículo buscado puede llevar un trabajo externo propio (lacado,
+    // zincado...) que se suma al coste de sus materiales
+    : n.servicio != null ? '<span class="badge-t">trabajo externo</span>'
     : !hoja ? '<span style="color:#888;font-size:12px">fabricado</span>'
     // compra valorada por albarán a la que le falta el tipo en el ERP
     : !n.tipo && n.precio != null ? '<span class="badge-t">compra sin tipo</span>'
@@ -246,7 +249,8 @@ function renderRow(r) {
     <td class="num">${fmt(n.cant)}</td>
     <td>${esc(n.unidad || '')}</td>
     <td>${tipoCell}</td>
-    <td class="num">${hoja ? (eur(n.precio) + (n.fuente === 'lista' ? ' <span style="color:#7c3aed;font-size:10px">lista</span>' : '')) : ''}</td>
+    <td class="num">${hoja ? (eur(n.precio) + (n.fuente === 'lista' ? ' <span style="color:#7c3aed;font-size:10px">lista</span>' : ''))
+                            : (n.servicio != null ? eur(n.servicio) : '')}</td>
     <td class="num">${eur(n.coste_mat)}</td>
     <td class="num">${tiempoCell}</td>
     <td class="num">${!hoja ? eur(n.coste_op) : ''}</td>
