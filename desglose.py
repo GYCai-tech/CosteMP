@@ -47,6 +47,13 @@ WITH
 -- OJO: tarifa y albaran pueden venir en UNIDADES distintas (p.ej. cordon a
 -- 0,026 EUR/m en tarifa frente a 24,79 EUR/rollo en albaran). Al revisar un
 -- precio que venga de lista, comprobar la unidad.
+--
+-- SE EXCLUYE LA LISTA DEL "PROVEEDOR 0" (IdLista 0). No es un proveedor: es el
+-- hueco generico que creo la instalacion del ERP en 2001, con vigencia caducada
+-- (HastaFecha 2021-01-01). Acumula 6.071 lineas, y buena parte son articulos que
+-- GYC FABRICA (PISO VARILLA, LATERAL NIDO SPRINT, MODULO RODEIRO...), donde el
+-- importe es una valoracion interna, no lo que pide un proveedor. Costear con eso
+-- es inventarse un precio de compra que nadie ha ofertado.
 precio AS (
     SELECT IdArticulo, Precio, Descuento, 'albaran' AS Fuente FROM (
         SELECT IdArticulo, Precio_EURO AS Precio, Descuento,
@@ -59,12 +66,15 @@ precio AS (
 
     UNION ALL
 
-    -- de la tarifa se coge el precio MAS RECIENTE (por FechaInsertUpdate)
+    -- de la tarifa se coge el precio MAS RECIENTE (por FechaInsertUpdate) de
+    -- entre las listas de PROVEEDORES DE VERDAD (ver nota del "Proveedor 0")
     SELECT IdArticulo, Precio, 0 AS Descuento, 'lista' AS Fuente FROM (
         SELECT lp.IdArticulo, lp.Precio,
                ROW_NUMBER() OVER (PARTITION BY lp.IdArticulo
                                   ORDER BY lp.FechaInsertUpdate DESC, lp.IdLista DESC) AS rn
         FROM dbo.Listas_Precios_Prov_Art lp
+        INNER JOIN dbo.Listas_Precios_Prov lc ON lc.IdLista = lp.IdLista
+                                             AND lc.IdProveedor <> '0'
         WHERE lp.Precio > 0
           AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl
                           WHERE pl.IdArticulo = lp.IdArticulo
