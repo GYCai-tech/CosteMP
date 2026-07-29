@@ -33,7 +33,24 @@ from db import get_engine
 #     SALVAVIDAS: si ese precio ya esta dentro del escandallo (un componente que
 #     cuesta lo mismo porque es el articulo comprado hecho) NO se suma, que si no
 #     se cuenta dos veces. Ver el CTE 'duplicado'.
-SQL = text("""
+# Articulos que NO deben sumar su precio propio y que el freno automatico (2%)
+# NO detecta, porque su version equivalente tiene un precio bastante distinto.
+# Van a mano porque no hay regla de datos que los separe de un lacado legitimo:
+# 18104044 (CUENCO V,2 lacado) cuesta 2,50 sobre una pieza de 2,62 -> 4,8% de
+# desvio y es correcto sumarlo, mientras que 18201029 desvia un 6,3% y no lo es.
+# Cualquier banda que atrape a uno se lleva al otro por delante.
+NO_SUMA_PROPIA = {
+    "10701016",  # MANGUERA TROZO DE 15CM (0,0598): comprar el trozo cortado o
+                 # cortarlo de 10701003 (manguera por metros) son ALTERNATIVAS
+    "18201028",  # MASTIL HAMACA GATO LACADO 1,50 vs MASTIL sin lacar 1,30
+    "18201029",  # BASE HAMACA GATO LACADO  1,60 vs BASE   sin lacar 1,50
+    "22306070",  # CUADRO SINFIN Monofasico (600) lleva dentro el TRIFASICO (578):
+                 # son productos distintos, el escandallo esta mal montado
+}
+_NO_SUMA_LISTA = ", ".join("'%s'" % c for c in sorted(NO_SUMA_PROPIA))
+_NO_SUMA_VALUES = ", ".join("('%s')" % c for c in sorted(NO_SUMA_PROPIA))
+
+_SQL = """
 WITH
 -- Precio de compra por articulo, con prioridad:
 --   1) ULTIMO ALBARAN con precio real (Pedidos_Prov_Lineas, la compra mas reciente).
@@ -168,6 +185,11 @@ duplicado AS (
     INNER JOIN precio ph ON ph.IdArticulo = c.Hijo
     INNER JOIN precio pp ON pp.IdArticulo = c.Padre
     WHERE ABS(ph.Precio - pp.Precio) <= 0.02 * ABS(pp.Precio)
+
+    UNION
+
+    -- los revisados a mano (ver NO_SUMA_PROPIA)
+    SELECT v.IdArticulo FROM (VALUES /*NO_SUMA_VALUES*/) v(IdArticulo)
 ),
 desglose AS (
     -- NIVEL 0: componentes directos del articulo (por fase o por conjunto)
@@ -298,7 +320,9 @@ LEFT JOIN dbo.Articulos_Tipos_Aprovisionamiento t
        ON t.IdTipoAprovisionamiento = art.IdTipoAprovisionamiento
 ORDER BY m.Ruta
 OPTION (MAXRECURSION 0);   -- sin limite de niveles
-""")
+"""
+
+SQL = text(_SQL.replace("/*NO_SUMA_VALUES*/", _NO_SUMA_VALUES))
 
 
 # Articulos.Estado: 0 = activo, 1 = dado de baja / descatalogado.
@@ -455,7 +479,9 @@ WHERE EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs
             ORDER BY pl.FechaAlbaran DESC, pl.IdPedido DESC
         ) x
         WHERE ABS(x.P - e.Precio) <= 0.02 * ABS(e.Precio))
-""")
+  -- y los revisados a mano (mismo criterio que el CTE 'duplicado')
+  AND :codigo NOT IN (/*NO_SUMA_LISTA*/)
+""".replace("/*NO_SUMA_LISTA*/", _NO_SUMA_LISTA))
 
 
 def coste_propio(codigo: str):
@@ -619,6 +645,22 @@ _FILLS = {"mp": "FEF3C7", "sinprecio": "FDE0E0", "conjunto": "EDE9FE",
           "noesc": "DBEAFE", "total": "E2E8F0"}
 
 
+# Los importes se presentan con 4 DECIMALES (precios, costes de material, de
+# operacion y totales). El calculo interno sigue con mas precision a proposito:
+# redondear el rollup a 4 hacia desaparecer del arbol las lineas de fraccion de
+# centimo (ver el comentario de coste_mat en construir_arbol).
+_COLS_EUROS = ("Precio €", "Coste MP €", "Coste operación €", "Coste total €",
+               "PrecioCompra", "Coste")
+
+
+def _cuatro_decimales(ws, columnas):
+    """Formatea con 4 decimales las columnas de importe de una hoja."""
+    for i, nombre in enumerate(columnas, start=1):
+        if nombre in _COLS_EUROS:
+            for fila in range(2, ws.max_row + 1):
+                ws.cell(row=fila, column=i).number_format = "#,##0.0000"
+
+
 def _resaltar_sin_precio(ws, flags, ncols):
     """Rellena en rojo las filas cuyo flag SinPrecio es 1 (cabecera en fila 1)."""
     rojo = PatternFill("solid", fgColor="FFC7CE")
@@ -713,8 +755,10 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
                     cell.font = Font(bold=True)
         for c in range(1, ncols + 1):     # cabecera en negrita
             ws.cell(row=1, column=c).font = Font(bold=True)
+        _cuatro_decimales(ws, desg.columns)
 
         _resaltar_sin_precio(xls.sheets["Comprados"], comprados["SinPrecio"].tolist(), len(comprados_vis.columns))
+        _cuatro_decimales(xls.sheets["Comprados"], comprados_vis.columns)
 
 
 def main():

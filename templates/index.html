@@ -292,13 +292,13 @@ document.getElementById('dlesc').addEventListener('click', () => {
 });
 const fmt = n => (n==null ? '' : (+n).toLocaleString('es-ES', {maximumFractionDigits: 6}));
 const t2  = n => (n==null ? '' : (+n).toLocaleString('es-ES', {maximumFractionDigits: 2}));
-// 2 decimales normalmente, pero si el importe no es cero y se veria como "0,00"
-// se muestran mas decimales: un coste minimo no debe parecer coste cero.
+// 4 decimales, pero si el importe no es cero y aun asi se veria como "0,0000"
+// se muestran mas: un coste minimo no debe parecer coste cero.
 const eur = n => {
   if (n == null) return '';
   const v = +n;
-  const dec = (v !== 0 && Math.abs(v) < 0.005) ? 6 : 2;
-  return v.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: dec});
+  const dec = (v !== 0 && Math.abs(v) < 0.00005) ? 6 : 4;
+  return v.toLocaleString('es-ES', {minimumFractionDigits: 4, maximumFractionDigits: dec});
 };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 </script>
