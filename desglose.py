@@ -98,7 +98,15 @@ tiempo_op AS (
 -- todos sus trabajos tienen OrdenTrabajo = 0 (los "Sin operacion" del ERP).
 -- La fase existe solo para llevar los materiales. Que no tengan tiempo NO es
 -- un hueco de datos, es lo correcto: no hay mano de obra que imputar.
--- Se exige que NO haya ningun trabajo con OrdenTrabajo = 1 (hay 5 fases mixtas).
+-- Se exige que NO haya ningun trabajo con OrdenTrabajo = 1 (hay fases mixtas).
+--
+-- OrdenTrabajo = 0 NO BASTA. De sus 249 filas, 51 son operaciones de verdad
+-- (Lacar x16, Cortar x8, Soldar x5, Punzonar, Inyectar, Estampar...) a las que
+-- simplemente no se les marco la casilla. Dandolas por "sin operacion" se les
+-- borraba la mano de obra Y ADEMAS se les quitaba el aviso: 29 articulos salian
+-- a 0 EUR de operacion en silencio. Asi que se exige tambien que el trabajo se
+-- LLAME "sin operacion" (con sus erratas: "Sín operación", "Sin poeración",
+-- "sin operaion", "Sin fase", "no fase"). Lo dudoso se deja fuera y avisa.
 sin_operacion AS (
     SELECT DISTINCT fs.IdArticulo
     FROM dbo.Fases_Salidas fs
@@ -107,6 +115,10 @@ sin_operacion AS (
                   WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 0)
       AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
                       WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
+      AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                      WHERE tf.IdFase = fs.IdFase
+                        AND NOT (tf.Descrip LIKE 'sin%' OR tf.Descrip LIKE 'sín%'
+                                 OR tf.Descrip LIKE 'no fase%'))
 ),
 -- Componentes de cada articulo, unificando las dos vias de escandallo.
 componentes AS (
@@ -330,6 +342,11 @@ SELECT CASE WHEN EXISTS (
                   WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 0)
       AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
                       WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
+      -- mismo criterio de texto que el CTE sin_operacion (ver su comentario)
+      AND NOT EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                      WHERE tf.IdFase = fs.IdFase
+                        AND NOT (tf.Descrip LIKE 'sin%' OR tf.Descrip LIKE 'sín%'
+                                 OR tf.Descrip LIKE 'no fase%'))
 ) THEN 1 ELSE 0 END
 """)
 
