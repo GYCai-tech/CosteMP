@@ -79,27 +79,34 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
 
     def rollup(n):
         n["es_hoja"] = not n["hijos"]
-        # coste de operacion: solo nodos FABRICADOS (ramas)
+        # coste de operacion: solo nodos FABRICADOS (ramas).
+        # "tiempo" es min/PIEZA; "tiempo_op" son los minutos que consume esta
+        # linea (min/pieza x cantidad usada), que es lo que se cobra a 17 €/h.
         if n["es_hoja"]:
-            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 0
         elif n.get("tiempo") is not None:
             # hay tiempo medido en bonos: manda el dato real
+            n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4); n["sin_tiempo"] = 0
         elif n.get("sin_operacion"):
             # su fase no declara operación ("Sin operación"): 0 € de mano de obra
             # es CORRECTO, no es un dato que falte -> no se avisa
-            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 0
         else:
-            n["coste_op"] = 0.0; n["sin_tiempo"] = 1     # fabricado pero sin tiempo de bono
+            # fabricado pero sin tiempo de bono
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 1
         mat = n["coste"] or 0.0
         op = n["coste_op"]
+        tmin = n["tiempo_op"]
         for h in n["hijos"]:
             rollup(h)
-            mat += h["coste_mat"]; op += h["coste_op_total"]
+            mat += h["coste_mat"]; op += h["coste_op_total"]; tmin += h["tiempo_op_total"]
         # 6 decimales: con 4, un coste de 8,5e-06 EUR se redondeaba a 0,0 exacto
         # y desaparecia del arbol (ademas de dispararse como "sin coste").
         n["coste_mat"] = round(mat, 6)
         n["coste_op_total"] = round(op, 6)
+        # minutos acumulados del nodo: los suyos mas los de todo lo que cuelga
+        n["tiempo_op_total"] = round(tmin, 6)
         n["coste_total"] = round(mat + op, 6)
 
     rollup(root)
@@ -134,6 +141,7 @@ def api_desglose():
         "niveles": int(df["Nivel"].max()) if not df.empty else 0,
         "coste_material": arbol["coste_mat"] if arbol else 0,
         "coste_operacion": arbol["coste_op_total"] if arbol else 0,
+        "tiempo_total": arbol["tiempo_op_total"] if arbol else 0,
         "coste_total": arbol["coste_total"] if arbol else 0,
         "sin_precio": int(df["SinPrecio"].sum()) if not df.empty else 0,
         "filas": _records(df),

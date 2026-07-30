@@ -242,11 +242,9 @@ marcado AS (
         CASE WHEN d.Unidad = 'gr' THEN d.Cant / 1000.0 ELSE d.Cant END AS CantConv,
         CASE WHEN EXISTS (SELECT 1 FROM componentes c2 WHERE c2.Padre = d.IdArticulo)
              THEN 0 ELSE 1 END AS EsHoja,
-        -- Valorable a precio de albaran. Dos vias:
+        -- Valorable a precio de compra. Tres vias:
         --  (a) tiene TIPO DE APROVISIONAMIENTO (=alguien confirmo que se compra)
-        --      y es hoja, o es TRABAJO EXTERNO (tipo 5, el precio es el servicio
-        --      y se suma a sus materiales). Un articulo con escandallo se costea
-        --      por sus componentes; valorarlo ademas a precio lo contaria dos veces.
+        --      y es HOJA del arbol (no tiene escandallo que explotar).
         --  (b) NO tiene tipo pero tampoco ha tenido NUNCA fase de fabricacion:
         --      solo puede ser una compra a la que le falta rellenar el tipo en el
         --      ERP. Se valora igual (si hay albaran) en vez de contarla como 0 EUR
@@ -590,27 +588,33 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
 
     def rollup(n):
         n["es_hoja"] = not n["hijos"]
+        # "tiempo" es min/PIEZA; "tiempo_op" son los minutos que consume esta
+        # linea (min/pieza x cantidad usada), que es lo que se cobra a 17 €/h.
         if n["es_hoja"]:
-            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 0
         elif n.get("tiempo") is not None:
             # hay tiempo medido en bonos: manda el dato real aunque la fase
             # este declarada "sin operacion".
+            n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4); n["sin_tiempo"] = 0
         elif n.get("sin_operacion"):
             # su fase no declara operacion: 0 EUR de mano de obra es CORRECTO,
             # no es un dato que falte -> no se avisa como "sin tiempo".
-            n["coste_op"] = 0.0; n["sin_tiempo"] = 0
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 0
         else:
-            n["coste_op"] = 0.0; n["sin_tiempo"] = 1
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 1
         mat = n["coste"] or 0.0
         op = n["coste_op"]
+        tmin = n["tiempo_op"]
         for h in n["hijos"]:
             rollup(h)
-            mat += h["coste_mat"]; op += h["coste_op_total"]
+            mat += h["coste_mat"]; op += h["coste_op_total"]; tmin += h["tiempo_op_total"]
         # 6 decimales: con 4, un coste de 8,5e-06 EUR se redondeaba a 0,0 exacto
         # y desaparecia del arbol (ademas de dispararse como "sin coste").
         n["coste_mat"] = round(mat, 6)
         n["coste_op_total"] = round(op, 6)
+        # minutos acumulados del nodo: los suyos mas los de todo lo que cuelga
+        n["tiempo_op_total"] = round(tmin, 6)
         n["coste_total"] = round(mat + op, 6)
 
     rollup(root)
@@ -705,16 +709,19 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
                               else None) if hoja else None,
             "Coste MP €": n.get("coste") if (hoja or servicio is not None) else None,
             "Tiempo min": (None if hoja else n.get("tiempo")),
+            # minutos acumulados: los de esta linea mas los de todo lo que cuelga
+            "Tiempo total min": n.get("tiempo_op_total") or None,
             "Coste operación €": (None if hoja else n.get("coste_op")),
             "Coste total €": n.get("coste_total"),
         })
         cats.append(_categoria(n))
 
     coste_mat = arbol["coste_mat"]; coste_op = arbol["coste_op_total"]; coste_tot = arbol["coste_total"]
+    tiempo_tot = arbol["tiempo_op_total"]
     reg.append({"Nivel": None, "Componente": "TOTAL", "IdArticulo": "", "Cant": None,
                 "Ud": "", "Tipo": "", "Precio €": None, "Origen precio": "",
-                "Coste MP €": coste_mat,
-                "Tiempo min": None, "Coste operación €": coste_op, "Coste total €": coste_tot})
+                "Coste MP €": coste_mat, "Tiempo min": None, "Tiempo total min": tiempo_tot,
+                "Coste operación €": coste_op, "Coste total €": coste_tot})
     cats.append("total")
     desg = pd.DataFrame(reg)
 
@@ -730,11 +737,11 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     resumen = pd.DataFrame({
         "Concepto": ["Artículo", "Nombre", "Líneas", "Niveles",
                      "Coste MATERIA PRIMA (€)", "Coste MERCADERÍA (€)", "Coste otras compras (€)",
-                     "COSTE MATERIAL (€)", "COSTE OPERACIÓN (€)", "COSTE TOTAL (€)",
-                     "Comprables sin precio"],
+                     "COSTE MATERIAL (€)", "TIEMPO TOTAL (min)", "COSTE OPERACIÓN (€)",
+                     "COSTE TOTAL (€)", "Comprables sin precio"],
         "Valor": [codigo, nombre, len(df), int(df["Nivel"].max()),
                   coste_mp, coste_merc, coste_otros,
-                  coste_mat, coste_op, coste_tot, int(df["SinPrecio"].sum())],
+                  coste_mat, tiempo_tot, coste_op, coste_tot, int(df["SinPrecio"].sum())],
     })
 
     with pd.ExcelWriter(destino, engine="openpyxl") as xls:

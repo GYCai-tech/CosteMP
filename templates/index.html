@@ -95,7 +95,8 @@
       <th>Nivel</th><th>Componente</th><th>IdArticulo</th>
       <th class="num">Cant</th><th>Ud</th><th>Tipo</th>
       <th class="num">Precio €</th><th class="num">Coste MP €</th>
-      <th class="num">Tiempo min</th><th class="num">Coste op €</th><th class="num">Coste total €</th>
+      <th class="num">Tiempo min</th><th class="num">Tiempo total min</th>
+      <th class="num">Coste op €</th><th class="num">Coste total €</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -177,6 +178,7 @@ async function cargar(codigo, desc) {
         <td colspan="7" style="text-align:right">TOTAL</td>
         <td class="num">${eur(data.coste_material)}</td>
         <td></td>
+        <td class="num">${t2(data.tiempo_total)}</td>
         <td class="num">${eur(data.coste_operacion)}</td>
         <td class="num">${eur(data.coste_total)} €</td>
       </tr>`;
@@ -253,6 +255,7 @@ function renderRow(r) {
                             : (n.servicio != null ? eur(n.servicio) : '')}</td>
     <td class="num">${eur(n.coste_mat)}</td>
     <td class="num">${tiempoCell}</td>
+    <td class="num">${n.tiempo_op_total ? t2(n.tiempo_op_total) : ''}</td>
     <td class="num">${!hoja ? eur(n.coste_op) : ''}</td>
     <td class="num">${eur(n.coste_total)}</td>
   </tr>`;
