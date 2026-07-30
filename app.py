@@ -231,7 +231,7 @@ def resumen_lote(codigo):
     if df.empty:
         fila = {"IdArticulo": codigo, "Descripcion": nombre,
                 "CosteMaterial": None, "CosteOperacion": None, "CosteTotal": None,
-                "De conjunto": 0, "Sin escandallo": 0, "Sin tipo": 0, "Sin precio": 0,
+                "Sin escandallo": 0, "Sin tipo": 0, "Sin precio": 0,
                 "Estado": "No encontrado / sin datos"}
         return fila, []
 
@@ -243,25 +243,26 @@ def resumen_lote(codigo):
 
     padres = set(df["Articulo"])
     hojas = df[~df["IdArticulo"].isin(padres)]
-    de_conj = hojas[hojas["DeConjunto"] == 1].drop_duplicates("IdArticulo")
-    sin_esc = hojas[(hojas["SinEscandallo"] == 1) & (hojas["DeConjunto"] == 0)].drop_duplicates("IdArticulo")
+    # "De conjunto" ya no se cuenta aparte: era el mismo hueco que "Sin escandallo"
+    # (hoja con la fase desactivada y sin precio) con otra etiqueta, y separarlo
+    # daba a entender que su coste llegaba por otra via. No llega: son 0 €.
+    sin_esc = hojas[hojas["SinEscandallo"] == 1].drop_duplicates("IdArticulo")
     sin_tipo = hojas[(hojas["TipoCompra"].isna()) & (hojas["SinEscandallo"] == 0)].drop_duplicates("IdArticulo")
     sin_precio = df[df["SinPrecio"] == 1].drop_duplicates("IdArticulo")
 
     faltantes = []
-    for motivo, sub in [("Proviene de conjunto", de_conj),
-                        ("Sin escandallo activo", sin_esc),
+    for motivo, sub in [("Sin escandallo activo", sin_esc),
                         ("Sin tipo de aprovisionamiento", sin_tipo),
                         ("Sin precio de compra", sin_precio)]:
         for r in sub.to_dict(orient="records"):
             faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
                               "Descripcion": r["Componente"], "Motivo": motivo})
 
-    n_conj, n_esc, n_st, n_sp = len(de_conj), len(sin_esc), len(sin_tipo), len(sin_precio)
+    n_esc, n_st, n_sp = len(sin_esc), len(sin_tipo), len(sin_precio)
     fila = {"IdArticulo": codigo, "Descripcion": nombre,
             "CosteMaterial": coste_mat, "CosteOperacion": coste_op, "CosteTotal": coste_tot,
-            "De conjunto": n_conj, "Sin escandallo": n_esc, "Sin tipo": n_st, "Sin precio": n_sp,
-            "Estado": "OK" if (n_conj + n_esc + n_st + n_sp) == 0 else "Incompleto"}
+            "Sin escandallo": n_esc, "Sin tipo": n_st, "Sin precio": n_sp,
+            "Estado": "OK" if (n_esc + n_st + n_sp) == 0 else "Incompleto"}
     return fila, faltantes
 
 
