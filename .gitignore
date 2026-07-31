@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 salidas/
 *.xlsx
+# documentacion generada (se regenera desde su HTML, no se versiona)
+*.pdf
