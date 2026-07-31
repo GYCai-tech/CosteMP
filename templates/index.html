@@ -152,7 +152,7 @@ async function cargar(codigo, desc) {
 
   // aplanar el arbol en filas (orden pre-order) con profundidad y parentesco
   rows = []; byId = {}; collapsed.clear();
-  const holes = {}, sinEsc = {}, deConj = {}, sinTiempo = {};
+  const holes = {}, sinEsc = {}, sinTiempo = {};
   let idc = 0;
   const bump = (bag, n, id) => (bag[n.id] || (bag[n.id] = { id: n.id, nombre: n.nombre, tipo: n.tipo, rowId: id, veces: 0 })).veces++;
   (function flat(nodes, depth, parent) {
@@ -164,7 +164,9 @@ async function cargar(codigo, desc) {
         collapsed.add(id); flat(n.hijos, depth + 1, id);
         if (n.sin_tiempo) bump(sinTiempo, n, id);                      // fabricada sin tiempo de bono
       }
-      else if (n.de_conjunto) bump(deConj, n, id);                     // pieza de conjunto
+      // las piezas "de conjunto" ya no se avisan aparte: son el mismo hueco que
+      // "sin escandallo" (hoja con la fase desactivada y sin precio, 0 €) y
+      // separarlas daba a entender que su coste llegaba por la vía del conjunto
       else if (n.sin_escandallo) bump(sinEsc, n, id);                  // pieza fabricada sin fase activa
       // hueco REAL = no hay precio de albaran con el que costear. El tipo ya no
       // se exige para valorar, asi que su falta no es un hueco de coste.
@@ -184,12 +186,12 @@ async function cargar(codigo, desc) {
       </tr>`;
   tbl.classList.add('show'); tools.classList.add('show');
   refresh();
-  renderAlert(Object.values(holes), Object.values(sinEsc), Object.values(deConj), Object.values(sinTiempo));
+  renderAlert(Object.values(holes), Object.values(sinEsc), Object.values(sinTiempo));
 }
 
-function renderAlert(holes, sinEsc, deConj, sinTiempo) {
+function renderAlert(holes, sinEsc, sinTiempo) {
   const el = document.getElementById('alert');
-  if (!holes.length && !sinEsc.length && !deConj.length && !sinTiempo.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+  if (!holes.length && !sinEsc.length && !sinTiempo.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
   const item = (x, badge) => `<div class="it" data-row="${x.rowId}">
       <span class="c">${x.id}</span> ${badge}
       ${x.veces > 1 ? '<span class="b" style="background:#f3f4f6;color:#666">×' + x.veces + '</span>' : ''}
@@ -201,8 +203,6 @@ function renderAlert(holes, sinEsc, deConj, sinTiempo) {
     + sinTiempo.map(x => item(x, '<span class="b" style="background:#dbeafe;color:#1d4ed8">sin tiempo</span>')).join('');
   if (sinEsc.length) html += '<h3 style="color:#1d4ed8;margin-top:14px">◆ Sin escandallo · ' + sinEsc.length + '</h3>'
     + sinEsc.map(x => item(x, '<span class="badge-s">sin escandallo</span>')).join('');
-  if (deConj.length) html += '<h3 style="color:#6d28d9;margin-top:14px">◆ De conjunto · ' + deConj.length + '</h3>'
-    + deConj.map(x => item(x, '<span class="badge-c">conjunto</span>')).join('');
   el.innerHTML = html;
   el.classList.add('show');
   el.querySelectorAll('.it').forEach(it => it.addEventListener('click', () => reveal(+it.dataset.row)));
