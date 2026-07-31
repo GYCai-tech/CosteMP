@@ -101,8 +101,36 @@ precio AS (
     ) t
     WHERE t.rn = 1
 ),
--- Tiempo de operacion (min/pieza) por articulo: media de los bonos de produccion
--- (TotalMinutos/TotalPiezas) con fase activa. Es la base del coste de mano de obra.
+-- MANO DE OBRA IMPUTADA A MANO (Trabajos_ManoObra). Es la fuente PREFERENTE de
+-- tiempo: produccion la rellena operacion a operacion en el ERP, asi que cuando
+-- existe manda sobre la media de bonos.
+--   - Duracion viene en DIAS (IdUnidadDuracion = 'D'), de ahi el x1440 para
+--     pasarla a minutos. Comprobado contra CosteTotal: 0,001389 D x 24 h x 17
+--     EUR/h = 0,5667 EUR, que es exactamente lo que guarda la fila.
+--   - se enlaza por Trabajos_Fases: Trabajos_ManoObra.IdTrabajo -> IdFase -> el
+--     articulo que sale de esa fase.
+--   - se SUMAN las lineas de una misma fase (una fase puede llevar varios
+--     trabajos, cada uno con su mano de obra) y luego se agrupa por articulo.
+--     El MAX final es defensivo: hoy ningun articulo sale de dos fases activas,
+--     asi que con una sola fase es indiferente.
+--   - Duracion = 0 NO es una medicion, es la casilla sin rellenar (mismo
+--     criterio que con los precios a cero), asi que no cuenta y se cae al bono.
+tiempo_mano_obra AS (
+    SELECT fs.IdArticulo, MAX(m.Minutos) AS TiempoMin
+    FROM (
+        SELECT tf.IdFase, SUM(tmo.Duracion) * 1440.0 AS Minutos
+        FROM dbo.Trabajos_ManoObra tmo
+        INNER JOIN dbo.Trabajos_Fases tf ON tf.IdTrabajo = tmo.IdTrabajo
+        WHERE tmo.Duracion > 0
+        GROUP BY tf.IdFase
+    ) m
+    INNER JOIN dbo.Fases f5 ON f5.IdFase = m.IdFase AND f5.Activa <> 0
+    INNER JOIN dbo.Fases_Salidas fs ON fs.IdFase = m.IdFase
+    GROUP BY fs.IdArticulo
+),
+-- RESPALDO: media de los bonos de produccion (TotalMinutos/TotalPiezas) con fase
+-- activa. Se usa solo si el articulo no tiene mano de obra imputada, y entonces
+-- la linea sale marcada como "teorico" en pantalla.
 tiempo_op AS (
     SELECT obs.IdArticulo,
            AVG(CAST(ob.TotalMinutos AS float) / NULLIF(ob.TotalPiezas, 0)) AS TiempoMin
@@ -304,7 +332,11 @@ SELECT
               AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fss WHERE fss.IdArticulo = m.IdArticulo)
               AND EXISTS (SELECT 1 FROM dbo.Articulos_Conjuntos ac WHERE ac.IdArticulo = m.IdArticulo)
          THEN 1 ELSE 0 END AS DeConjunto,
-    tp.TiempoMin AS TiempoOp,                       -- min/pieza de operacion (mano de obra)
+    -- min/pieza de operacion. Manda la mano de obra imputada; si no la hay, la
+    -- media de bonos, y entonces TiempoTeorico avisa de que es una estimacion.
+    COALESCE(tmo.TiempoMin, tp.TiempoMin) AS TiempoOp,
+    CASE WHEN tmo.TiempoMin IS NULL AND tp.TiempoMin IS NOT NULL
+         THEN 1 ELSE 0 END AS TiempoTeorico,
     -- 1 = su fase no declara operacion ("Sin operacion"): no lleva mano de obra
     -- y por tanto no debe avisarse como "sin tiempo".
     CASE WHEN so.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS SinOperacion,
@@ -312,6 +344,7 @@ SELECT
 FROM marcado m
 LEFT JOIN dbo.Articulos  art ON art.IdArticulo = m.IdArticulo
 LEFT JOIN precio         p   ON p.IdArticulo   = m.IdArticulo
+LEFT JOIN tiempo_mano_obra tmo ON tmo.IdArticulo = m.IdArticulo
 LEFT JOIN tiempo_op      tp  ON tp.IdArticulo  = m.IdArticulo
 LEFT JOIN sin_operacion  so  ON so.IdArticulo  = m.IdArticulo
 LEFT JOIN dbo.Articulos_Tipos_Aprovisionamiento t
@@ -364,22 +397,47 @@ def nombre_articulo(codigo: str) -> str:
     return r[0] if r and r[0] else ""
 
 
+# Tiempo del articulo RAIZ, con la misma prioridad que los CTE de arriba:
+# manda la mano de obra imputada (Trabajos_ManoObra) y la media de bonos es el
+# respaldo. Ver el comentario de tiempo_mano_obra para el porque del x1440.
 SQL_TIEMPO = text("""
-SELECT AVG(CAST(ob.TotalMinutos AS float) / NULLIF(ob.TotalPiezas, 0)) AS TiempoMin
-FROM dbo.Ordenes_Bonos_Salidas obs
-INNER JOIN dbo.Ordenes_Articulos oa ON oa.IdArticulo = obs.IdArticulo AND oa.IdOrden = obs.IdOrden
-INNER JOIN dbo.Fases f ON f.IdFase = oa.IdFase AND f.Activa <> 0
-INNER JOIN dbo.Ordenes_Bonos ob ON ob.IdBono = obs.IdBono AND ob.IdOrden = obs.IdOrden
-WHERE ob.TotalPiezas > 0 AND obs.IdArticulo = :codigo
+WITH mano_obra AS (
+    SELECT SUM(tmo.Duracion) * 1440.0 AS TiempoMin
+    FROM dbo.Trabajos_ManoObra tmo
+    INNER JOIN dbo.Trabajos_Fases tf ON tf.IdTrabajo = tmo.IdTrabajo
+    INNER JOIN dbo.Fases f2 ON f2.IdFase = tf.IdFase AND f2.Activa <> 0
+    INNER JOIN dbo.Fases_Salidas fs ON fs.IdFase = tf.IdFase
+    WHERE fs.IdArticulo = :codigo AND tmo.Duracion > 0
+),
+bonos AS (
+    SELECT AVG(CAST(ob.TotalMinutos AS float) / NULLIF(ob.TotalPiezas, 0)) AS TiempoMin
+    FROM dbo.Ordenes_Bonos_Salidas obs
+    INNER JOIN dbo.Ordenes_Articulos oa ON oa.IdArticulo = obs.IdArticulo AND oa.IdOrden = obs.IdOrden
+    INNER JOIN dbo.Fases f ON f.IdFase = oa.IdFase AND f.Activa <> 0
+    INNER JOIN dbo.Ordenes_Bonos ob ON ob.IdBono = obs.IdBono AND ob.IdOrden = obs.IdOrden
+    WHERE ob.TotalPiezas > 0 AND obs.IdArticulo = :codigo
+)
+-- las dos son agregados sin GROUP BY, asi que cada una devuelve exactamente una
+-- fila (con NULL si no hay datos) y el CROSS JOIN da una sola fila
+SELECT COALESCE(mo.TiempoMin, b.TiempoMin) AS TiempoMin,
+       CASE WHEN mo.TiempoMin IS NULL AND b.TiempoMin IS NOT NULL
+            THEN 1 ELSE 0 END AS Teorico
+FROM mano_obra mo CROSS JOIN bonos b
 """)
 
 
 def tiempo_operacion(codigo: str):
-    """Tiempo medio de operacion (min/pieza) del articulo (para el nodo raiz)."""
+    """Tiempo de operacion (min/pieza) del articulo raiz y si es una estimacion.
+
+    Devuelve (minutos, es_teorico): minutos es None si no hay ningun dato, y
+    es_teorico vale 1 cuando el tiempo sale de la media de bonos porque el
+    articulo no tiene mano de obra imputada en el ERP."""
     codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
     with get_engine().connect() as cn:
         r = cn.execute(SQL_TIEMPO, {"codigo": codigo}).fetchone()
-    return float(r[0]) if r and r[0] is not None else None
+    if not r or r[0] is None:
+        return None, 0
+    return float(r[0]), int(r[1] or 0)
 
 
 SQL_SIN_OPERACION = text("""
@@ -552,16 +610,19 @@ def _s(v):
 
 
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
-                    servicio_raiz=None):
+                    servicio_raiz=None, teorico_raiz=0):
     """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
     fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo.
 
     servicio_raiz: coste del trabajo externo del propio articulo buscado, que
-    se suma a sus materiales (ver SQL_SERVICIO_EXTERNO)."""
+    se suma a sus materiales (ver SQL_SERVICIO_EXTERNO).
+    teorico_raiz: 1 si el tiempo de la raiz sale de la media de bonos en vez de
+    la mano de obra imputada en el ERP."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "fuente": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
-            "tiempo": tiempo_raiz, "coste": servicio_raiz or 0.0, "hijos": []}
+            "tiempo": tiempo_raiz, "tiempo_teorico": int(teorico_raiz or 0),
+            "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
     for r in df.sort_values("Ruta").to_dict(orient="records"):
@@ -581,6 +642,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                 "sin_escandallo": int(r.get("SinEscandallo", 0) or 0),
                 "sin_operacion": int(r.get("SinOperacion", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
+                "tiempo_teorico": int(r.get("TiempoTeorico", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -591,18 +653,29 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
         # "tiempo" es min/PIEZA; "tiempo_op" son los minutos que consume esta
         # linea (min/pieza x cantidad usada), que es lo que se cobra a 17 €/h.
         if n["es_hoja"]:
-            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 0
-        elif n.get("tiempo") is not None:
-            # hay tiempo medido en bonos: manda el dato real aunque la fase
-            # este declarada "sin operacion".
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
+            n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
+        elif n.get("tiempo") is not None and not n.get("tiempo_teorico"):
+            # mano de obra IMPUTADA en el ERP: declaracion explicita de que la
+            # pieza lleva trabajo, manda incluso sobre la casilla de operacion.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
-            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4); n["sin_tiempo"] = 0
+            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
+            n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
         elif n.get("sin_operacion"):
             # su fase no declara operacion: 0 EUR de mano de obra es CORRECTO,
             # no es un dato que falte -> no se avisa como "sin tiempo".
-            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 0
+            # MANDA SOBRE LA MEDIA DE PARTES: ver el comentario largo en app.py
+            # (10902103 ANGULO DER. salia a 0,27 min y su espejo a "sin operacion").
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
+            n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
+        elif n.get("tiempo") is not None:
+            # tiempo teorico (media de partes) de una pieza que si declara operacion
+            n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
+            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
+            n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
         else:
-            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0; n["sin_tiempo"] = 1
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
+            n["sin_tiempo"] = 1; n["tiempo_efectivo"] = None
         mat = n["coste"] or 0.0
         op = n["coste_op"]
         tmin = n["tiempo_op"]
@@ -677,8 +750,9 @@ def _resaltar_sin_precio(ws, flags, ncols):
 def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     """Escribe el Excel (tres hojas): Desglose (arbol indentado con material y
     operacion, coloreado por categoria), Comprados y Resumen (material+operacion+total)."""
-    arbol = construir_arbol(df, codigo, nombre, tiempo_operacion(codigo), sin_operacion(codigo),
-                            coste_propio(codigo))
+    tiempo_raiz, teorico_raiz = tiempo_operacion(codigo)
+    arbol = construir_arbol(df, codigo, nombre, tiempo_raiz, sin_operacion(codigo),
+                            coste_propio(codigo), teorico_raiz)
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
@@ -708,7 +782,13 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
                               else "albarán" if n.get("fuente") == "albaran"
                               else None) if hoja else None,
             "Coste MP €": n.get("coste") if (hoja or servicio is not None) else None,
-            "Tiempo min": (None if hoja else n.get("tiempo")),
+            # el tiempo que de verdad se cobra: None si la casilla del ERP dice
+            # "sin operacion", aunque el articulo tenga partes fichados
+            "Tiempo min": (None if hoja else n.get("tiempo_efectivo")),
+            # de donde sale el tiempo: imputado en el ERP o estimado con bonos
+            "Origen tiempo": (None if (hoja or n.get("tiempo_efectivo") is None)
+                              else "teórico" if n.get("tiempo_teorico")
+                              else "mano de obra"),
             # minutos acumulados: los de esta linea mas los de todo lo que cuelga
             "Tiempo total min": n.get("tiempo_op_total") or None,
             "Coste operación €": (None if hoja else n.get("coste_op")),
@@ -720,7 +800,8 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     tiempo_tot = arbol["tiempo_op_total"]
     reg.append({"Nivel": None, "Componente": "TOTAL", "IdArticulo": "", "Cant": None,
                 "Ud": "", "Tipo": "", "Precio €": None, "Origen precio": "",
-                "Coste MP €": coste_mat, "Tiempo min": None, "Tiempo total min": tiempo_tot,
+                "Coste MP €": coste_mat, "Tiempo min": None, "Origen tiempo": "",
+                "Tiempo total min": tiempo_tot,
                 "Coste operación €": coste_op, "Coste total €": coste_tot})
     cats.append("total")
     desg = pd.DataFrame(reg)
