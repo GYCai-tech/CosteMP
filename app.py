@@ -9,7 +9,6 @@ import io
 import math
 
 import pandas as pd
-from openpyxl.styles import PatternFill
 from flask import Flask, request, jsonify, send_file, render_template
 
 from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_excel,
@@ -248,15 +247,23 @@ def extraer_ids(file):
 
 def resumen_lote(codigo):
     """Coste total de un artículo + datos faltantes (sin tipo / sin precio),
-    calculando coste de material y operación mediante el árbol."""
+    calculando coste de material y operación mediante el árbol.
+
+    La columna Completo (Sí/No) resume si al artículo le falta algún dato. El
+    detalle de lo que falta va SIEMPRE a la hoja Faltantes, así que un "No" se
+    puede rastrear allí sin depender de ningún color."""
     df = desglose(codigo)
     nombre = nombre_articulo(codigo)
     if df.empty:
+        # sin despiece no hay nada que contar, pero el motivo tiene que quedar
+        # registrado en Faltantes o el "No" se quedaría sin explicación
         fila = {"IdArticulo": codigo, "Descripcion": nombre,
                 "CosteMaterial": None, "CosteOperacion": None, "CosteTotal": None,
                 "Sin escandallo": 0, "Sin tipo": 0, "Sin precio": 0,
-                "Estado": "No encontrado / sin datos"}
-        return fila, []
+                "Completo": "No"}
+        return fila, [{"Articulo": codigo, "IdComponente": codigo,
+                       "Descripcion": nombre or "(no existe en el ERP)",
+                       "Motivo": "Artículo no encontrado o sin despiece"}]
 
     tiempo_raiz, teorico_raiz = tiempo_operacion(codigo)
     arbol = construir_arbol(df, codigo, nombre, tiempo_raiz, sin_operacion(codigo),
@@ -286,7 +293,7 @@ def resumen_lote(codigo):
     fila = {"IdArticulo": codigo, "Descripcion": nombre,
             "CosteMaterial": coste_mat, "CosteOperacion": coste_op, "CosteTotal": coste_tot,
             "Sin escandallo": n_esc, "Sin tipo": n_st, "Sin precio": n_sp,
-            "Estado": "OK" if (n_esc + n_st + n_sp) == 0 else "Incompleto"}
+            "Completo": "Sí" if (n_esc + n_st + n_sp) == 0 else "No"}
     return fila, faltantes
 
 
@@ -316,17 +323,12 @@ def lote():
         pd.DataFrame([{"Articulo": "", "IdComponente": "", "Descripcion": "", "Motivo": "(sin faltantes)"}])
 
     buf = io.BytesIO()
-    rojo = PatternFill("solid", fgColor="FFC7CE")
     with pd.ExcelWriter(buf, engine="openpyxl") as xls:
+        # sin resaltado de color: la columna Completo (Sí/No) es la que marca los
+        # artículos con datos incompletos, y el detalle está en la hoja Faltantes.
+        # Así el fichero se puede filtrar y ordenar sin depender del formato.
         df_costes.to_excel(xls, sheet_name="Costes", index=False)
         df_falt.to_excel(xls, sheet_name="Faltantes", index=False)
-        # resaltar en rojo los artículos incompletos / no encontrados
-        ws = xls.sheets["Costes"]
-        ncols = len(df_costes.columns)
-        for pos, estado in enumerate(df_costes["Estado"].tolist()):
-            if estado != "OK":
-                for c in range(1, ncols + 1):
-                    ws.cell(row=pos + 2, column=c).fill = rojo
     buf.seek(0)
     return send_file(
         buf,
