@@ -46,6 +46,9 @@ NO_SUMA_PROPIA = {
     "18201029",  # BASE HAMACA GATO LACADO  1,60 vs BASE   sin lacar 1,50
     "22306070",  # CUADRO SINFIN Monofasico (600) lleva dentro el TRIFASICO (578):
                  # son productos distintos, el escandallo esta mal montado
+    "11601001",  # BEBEDERO AUTOMATICO COLGANTE (8,30) lleva dentro 11601067
+                 # BEBEDERO AUTOMATICO Arion (8,90): el mismo bebedero comprado
+                 # en fechas distintas -> 6,7% de desvio, el freno no lo pilla
 }
 _NO_SUMA_LISTA = ", ".join("'%s'" % c for c in sorted(NO_SUMA_PROPIA))
 _NO_SUMA_VALUES = ", ".join("('%s')" % c for c in sorted(NO_SUMA_PROPIA))
