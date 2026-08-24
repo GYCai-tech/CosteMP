@@ -198,17 +198,28 @@ componentes AS (
     WHERE NOT EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs2
                       INNER JOIN dbo.Fases f2 ON f2.IdFase = fs2.IdFase AND f2.Activa <> 0
                       WHERE fs2.IdArticulo = ac.IdArticuloPadre)
-      -- corta ciclos de 2 nodos: dato contradictorio si el HIJO ya declara al
-      -- PADRE como su propio componente via fase activa (18608010 lleva dentro
-      -- 60009006 por su fase, y ademas 60009006 esta metido como "conjunto" de
+      -- corta ciclos DEGENERADOS de 2 nodos: el conjunto tiene un UNICO
+      -- componente y es precisamente el mismo articulo que ya lo lleva a EL
+      -- dentro por su fase activa (18608010 lleva dentro 60009006 por su fase,
+      -- y ademas 60009006 esta metido como "conjunto" formado por 1 unidad de
       -- 18608010 -> bucle que hacia desaparecer el precio del NIDO...(comprado)
-      -- del calculo sin avisar. Ver los 3 casos NIDO MADERA, IdArticuloPadre
-      -- 60009006/60009007/60009009).
-      AND NOT EXISTS (SELECT 1 FROM dbo.Fases f3
-                      INNER JOIN dbo.Fases_Salidas  fs3 ON fs3.IdFase = f3.IdFase AND f3.Activa <> 0
-                      INNER JOIN dbo.Fases_Entradas fe3 ON fe3.IdFase = f3.IdFase
-                      WHERE fs3.IdArticulo = ac.IdArticulo
-                        AND fe3.IdArticulo = ac.IdArticuloPadre)
+      -- sin avisar). Hay 152 conjuntos con este mismo bucle fase<->conjunto en
+      -- toda la base, pero en 148 el conjunto agrupa 2 o mas piezas REALES
+      -- (p.ej. CONJUNTO GANCHOS = gancho izq. + gancho der.): ahi la relacion
+      -- de conjunto es legitima y hay que dejarla, el bucle viene de que ADEMAS
+      -- cada pieza referencia al conjunto en su propia fase (dato raro, pero no
+      -- rompe el coste porque el conjunto no tiene precio propio que duplicar).
+      -- Solo los 4 conjuntos de 1 solo componente son el caso degenerado real:
+      -- 60008007, 60009006, 60009007, 60009009.
+      AND (
+            NOT EXISTS (SELECT 1 FROM dbo.Fases f3
+                        INNER JOIN dbo.Fases_Salidas  fs3 ON fs3.IdFase = f3.IdFase AND f3.Activa <> 0
+                        INNER JOIN dbo.Fases_Entradas fe3 ON fe3.IdFase = f3.IdFase
+                        WHERE fs3.IdArticulo = ac.IdArticulo
+                          AND fe3.IdArticulo = ac.IdArticuloPadre)
+            OR (SELECT COUNT(*) FROM dbo.Articulos_Conjuntos ac9
+                WHERE ac9.IdArticuloPadre = ac.IdArticuloPadre) <> 1
+          )
 ),
 -- Articulos cuyo PRECIO PROPIO YA ESTA DENTRO de su escandallo: alguno de sus
 -- componentes directos cuesta lo mismo que ellos, porque es el mismo articulo
