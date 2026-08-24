@@ -198,6 +198,17 @@ componentes AS (
     WHERE NOT EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs2
                       INNER JOIN dbo.Fases f2 ON f2.IdFase = fs2.IdFase AND f2.Activa <> 0
                       WHERE fs2.IdArticulo = ac.IdArticuloPadre)
+      -- corta ciclos de 2 nodos: dato contradictorio si el HIJO ya declara al
+      -- PADRE como su propio componente via fase activa (18608010 lleva dentro
+      -- 60009006 por su fase, y ademas 60009006 esta metido como "conjunto" de
+      -- 18608010 -> bucle que hacia desaparecer el precio del NIDO...(comprado)
+      -- del calculo sin avisar. Ver los 3 casos NIDO MADERA, IdArticuloPadre
+      -- 60009006/60009007/60009009).
+      AND NOT EXISTS (SELECT 1 FROM dbo.Fases f3
+                      INNER JOIN dbo.Fases_Salidas  fs3 ON fs3.IdFase = f3.IdFase AND f3.Activa <> 0
+                      INNER JOIN dbo.Fases_Entradas fe3 ON fe3.IdFase = f3.IdFase
+                      WHERE fs3.IdArticulo = ac.IdArticulo
+                        AND fe3.IdArticulo = ac.IdArticuloPadre)
 ),
 -- Articulos cuyo PRECIO PROPIO YA ESTA DENTRO de su escandallo: alguno de sus
 -- componentes directos cuesta lo mismo que ellos, porque es el mismo articulo
