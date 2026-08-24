@@ -15,8 +15,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-dev.txt ./
+# requirements-dev.txt incluye requirements.txt + pytest: los tests de
+# regresión (tests/) quedan disponibles dentro del propio contenedor, tanto
+# en producción (docker exec ... python -m pytest tests/) como en CI.
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 

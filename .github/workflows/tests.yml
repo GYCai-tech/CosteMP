@@ -1,0 +1,40 @@
+name: Tests
+
+# Tests de INTEGRACIÓN: necesitan alcanzar el SQL Server del ERP
+# (GOMEZYCRESPO), que está en una IP interna (10.0.0.6). Por eso corren en un
+# runner self-hosted en el mismo servidor que despliega la app (igual que
+# hace GYCai-tech/Gestor) y no en runners de GitHub en la nube, que no
+# llegarían a esa red.
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Levantar contenedor de pruebas (reutiliza la imagen ya construida)
+        run: |
+          docker rm -f costemp-ci >/dev/null 2>&1 || true
+          docker run -d --name costemp-ci \
+            --env-file /home/goyco/apps/costes-articulo/.env \
+            costemp:latest tail -f /dev/null
+
+      - name: Copiar dentro el código recién subido (no la imagen antigua)
+        run: |
+          docker cp app.py costemp-ci:/app/app.py
+          docker cp desglose.py costemp-ci:/app/desglose.py
+          docker cp db.py costemp-ci:/app/db.py
+          docker cp templates/. costemp-ci:/app/templates/
+          docker cp tests/. costemp-ci:/app/tests/
+
+      - name: Ejecutar los tests de regresión contra el ERP real (solo lectura)
+        run: docker exec -w /app costemp-ci python -m pytest tests/ -v
+
+      - name: Limpiar el contenedor de pruebas
+        if: always()
+        run: docker rm -f costemp-ci
