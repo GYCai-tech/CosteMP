@@ -71,6 +71,24 @@ Genera un Excel con dos hojas:
   Componente, Cant, Unidad, EsMateriaPrima).
 - **Resumen**: artículo, nº de líneas, niveles y líneas de materia prima.
 
+## Tests
+
+`tests/` tiene tests de **regresión de la lógica de negocio** (cálculo de
+coste): cada uno fija un artículo real que sirvió para encontrar y arreglar
+un bug (duplicación de precio propio, ciclos fase↔conjunto, líneas de compra
+con 100% de descuento, avisos de "sin tiempo" en trabajo externo...). Son
+tests de integración: conectan contra el ERP real en solo lectura, igual que
+la app — no hay base de datos de prueba ni mocks.
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+Correr antes de tocar `desglose.py` o `app.py` (sobre todo la parte del CTE
+recursivo, `NO_SUMA_PROPIA`, o el cálculo de tiempo/operación) para
+comprobar que no se ha reintroducido ninguno de estos bugs.
+
 ## Estructura
 
 | Archivo | Qué hace |
