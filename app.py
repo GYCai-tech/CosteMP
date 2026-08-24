@@ -8,6 +8,7 @@ Luego abrir http://127.0.0.1:5000
 import io
 import math
 
+import openpyxl
 import pandas as pd
 from flask import Flask, request, jsonify, send_file, render_template
 
@@ -219,10 +220,34 @@ def _norm(s):
                    if not unicodedata.combining(c)).strip()
 
 
+def primera_hoja_visible(file):
+    """Nombre de la primera hoja NO oculta del libro, o None si no se puede leer.
+
+    pd.read_excel() sin sheet_name coge la primera hoja del libro aunque esté
+    oculta. Los libros de análisis que llegan de Finanzas arrastran decenas de
+    hojas ocultas de trabajo, así que la primera del fichero no suele ser la que
+    el usuario ve al abrirlo: se costeaba un juego de artículos distinto del que
+    creía haber subido, y sin ningún aviso."""
+    try:
+        wb = openpyxl.load_workbook(file, read_only=True)
+        try:
+            for ws in wb.worksheets:
+                if ws.sheet_state == "visible":
+                    return ws.title
+        finally:
+            wb.close()
+    except Exception:
+        return None                          # que no rompa: se cae al comportamiento previo
+    return None
+
+
 def extraer_ids(file):
     """Extrae los IDs de artículo de un Excel subido. Busca una columna que
     se llame algo tipo 'articulo'/'codigo'/'id'; si no, usa la primera columna."""
-    df = pd.read_excel(file, dtype=str)
+    hoja = primera_hoja_visible(file)
+    if hasattr(file, "seek"):
+        file.seek(0)                         # openpyxl deja consumido el stream subido
+    df = pd.read_excel(file, dtype=str, **({"sheet_name": hoja} if hoja else {}))
     objetivo = None
     for col in df.columns:
         cl = _norm(col)
