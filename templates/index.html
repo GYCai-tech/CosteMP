@@ -167,9 +167,12 @@ async function cargar(codigo, desc) {
         collapsed.add(id); flat(n.hijos, depth + 1, id);
         if (n.sin_tiempo) bump(sinTiempo, n, id);                      // fabricada sin tiempo de bono
       }
-      // las piezas "de conjunto" ya no se avisan aparte: son el mismo hueco que
-      // "sin escandallo" (hoja con la fase desactivada y sin precio, 0 €) y
-      // separarlas daba a entender que su coste llegaba por la vía del conjunto
+      // las piezas "de conjunto" no se avisan: su coste SI llega, por la via del
+      // conjunto, que entra entero una sola vez (ver 11401042, donde el CONJUNTO
+      // PONEDERO 2 HUECOS trae la chapa por el piso y techo y barreta salen a 0 a
+      // proposito). Va antes que el resto de la cadena: si solo se quitara de
+      // sinEsc caeria en el "precio == null" de abajo y volveria como "sin coste".
+      else if (n.de_conjunto) { /* su coste entra por el conjunto */ }
       else if (n.sin_escandallo) bump(sinEsc, n, id);                  // pieza fabricada sin fase activa
       // hueco REAL = no hay precio de albaran con el que costear. El tipo ya no
       // se exige para valorar, asi que su falta no es un hueco de coste.

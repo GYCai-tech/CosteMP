@@ -270,6 +270,68 @@ def extraer_ids(file):
     return ids
 
 
+# Cada motivo de detalle cuelga de la alerta con la que la interfaz lo agrupa
+# (ver renderAlert() en templates/index.html): "sin tipo" y "sin precio" son dos
+# lecturas del mismo agujero —la pieza no se ha podido valorar— y por eso el
+# Excel las suma bajo "Sin coste" sin perder el motivo concreto de cada línea.
+ALERTA_DE_MOTIVO = {
+    "Sin tipo de aprovisionamiento": "Sin coste",
+    "Sin precio de compra": "Sin coste",
+    "Sin escandallo activo": "Sin escandallo",
+    "Sin tiempo de operación": "Sin tiempo de operación",
+}
+
+
+def avisos_arbol(arbol):
+    """Los mismos huecos que el panel de avisos de la interfaz, recorriendo el
+    árbol con su mismo criterio (ver el bloque flat() de templates/index.html).
+
+    Se recorre el árbol y no el DataFrame a propósito: el lote tenía sus propios
+    filtros y se desviaba de lo que se ve en pantalla. Los dos casos que lo
+    delataron: una pieza FABRICADA sin precio de compra no es un hueco (su coste
+    sube de sus componentes) y se contaba, y una compra directa —cuyo despiece es
+    una sola fila autorreferencial— se quedaba fuera del filtro de hojas y no se
+    miraba nunca, saliendo Completo con 0 €.
+
+    Criterio por nodo, en este orden:
+      - tiene hijos  -> es fabricada: solo puede faltarle el tiempo de operación
+      - de_conjunto  -> no es un hueco: su coste entra por el conjunto
+      - sin_escandallo -> pieza fabricada sin fase activa con la que costearla
+      - precio nulo  -> hueco de coste real; es "sin tipo" si además no tiene tipo
+    """
+    huecos = {"Sin escandallo activo": {}, "Sin tipo de aprovisionamiento": {},
+              "Sin precio de compra": {}, "Sin tiempo de operación": {}}
+
+    def visita(n):
+        if n["hijos"]:
+            if n.get("sin_tiempo"):
+                huecos["Sin tiempo de operación"].setdefault(n["id"], n)
+            for h in n["hijos"]:
+                visita(h)
+        # Una pieza de conjunto NO es un hueco: el material entra una sola vez al
+        # explotar el conjunto, y las demás piezas que salen de esa misma chapa
+        # llegan sin coste propio a propósito. El 11401042 lo enseña: el CONJUNTO
+        # PONEDERO 2 HUECOS agrupa techo, barreta y piso; el piso arrastra la
+        # chapa (3,79 €) y techo y barreta se avisaban como "sin escandallo"
+        # cuando su coste ya estaba contado. Esta rama va ANTES de la cadena
+        # porque si solo se quitara de "sin escandallo" caería en "precio nulo"
+        # y el falso aviso reaparecería como "Sin coste", que es peor.
+        elif n.get("de_conjunto"):
+            pass
+        elif n.get("sin_escandallo"):
+            huecos["Sin escandallo activo"].setdefault(n["id"], n)
+        elif n.get("precio") is None:
+            motivo = ("Sin precio de compra" if n.get("tipo")
+                      else "Sin tipo de aprovisionamiento")
+            huecos[motivo].setdefault(n["id"], n)
+
+    # la raíz solo se examina cuando ES la hoja (compra directa), igual que la
+    # interfaz, que arranca en arbol.hijos y cae a [arbol] si no tiene ninguno.
+    for n in (arbol["hijos"] or [arbol]):
+        visita(n)
+    return {k: list(v.values()) for k, v in huecos.items()}
+
+
 def resumen_lote(codigo):
     """Coste total de un artículo + datos faltantes (sin tipo / sin precio),
     calculando coste de material y operación mediante el árbol.
@@ -284,10 +346,12 @@ def resumen_lote(codigo):
         # registrado en Faltantes o el "No" se quedaría sin explicación
         fila = {"IdArticulo": codigo, "Descripcion": nombre,
                 "CosteMaterial": None, "CosteOperacion": None, "CosteTotal": None,
-                "Sin escandallo": 0, "Sin tipo": 0, "Sin precio": 0,
+                "Sin coste": 0, "Sin escandallo": 0, "Sin tiempo": 0,
+                "Sin tipo": 0, "Sin precio": 0,
                 "Completo": "No"}
         return fila, [{"Articulo": codigo, "IdComponente": codigo,
                        "Descripcion": nombre or "(no existe en el ERP)",
+                       "Alerta": "Sin coste",
                        "Motivo": "Artículo no encontrado o sin despiece"}]
 
     tiempo_raiz, teorico_raiz = tiempo_operacion(codigo)
@@ -297,27 +361,31 @@ def resumen_lote(codigo):
     coste_op = arbol["coste_op_total"] if arbol else 0.0
     coste_tot = arbol["coste_total"] if arbol else 0.0
 
-    padres = set(df["Articulo"])
-    hojas = df[~df["IdArticulo"].isin(padres)]
-    # "De conjunto" ya no se cuenta aparte: era el mismo hueco que "Sin escandallo"
-    # (hoja con la fase desactivada y sin precio) con otra etiqueta, y separarlo
-    # daba a entender que su coste llegaba por otra via. No llega: son 0 €.
-    sin_esc = hojas[hojas["SinEscandallo"] == 1].drop_duplicates("IdArticulo")
-    sin_tipo = hojas[(hojas["TipoCompra"].isna()) & (hojas["SinEscandallo"] == 0)].drop_duplicates("IdArticulo")
-    sin_precio = df[df["SinPrecio"] == 1].drop_duplicates("IdArticulo")
+    huecos = avisos_arbol(arbol)
+    sin_esc = huecos["Sin escandallo activo"]
+    sin_tipo = huecos["Sin tipo de aprovisionamiento"]
+    sin_precio = huecos["Sin precio de compra"]
+    sin_tiempo = huecos["Sin tiempo de operación"]
 
     faltantes = []
-    for motivo, sub in [("Sin escandallo activo", sin_esc),
-                        ("Sin tipo de aprovisionamiento", sin_tipo),
-                        ("Sin precio de compra", sin_precio)]:
-        for r in sub.to_dict(orient="records"):
-            faltantes.append({"Articulo": codigo, "IdComponente": r["IdArticulo"],
-                              "Descripcion": r["Componente"], "Motivo": motivo})
+    for motivo in ("Sin tipo de aprovisionamiento", "Sin precio de compra",
+                   "Sin escandallo activo", "Sin tiempo de operación"):
+        for n in huecos[motivo]:
+            faltantes.append({"Articulo": codigo, "IdComponente": n["id"],
+                              "Descripcion": n["nombre"],
+                              "Alerta": ALERTA_DE_MOTIVO[motivo], "Motivo": motivo})
 
-    n_esc, n_st, n_sp = len(sin_esc), len(sin_tipo), len(sin_precio)
+    n_esc, n_st, n_sp, n_tie = len(sin_esc), len(sin_tipo), len(sin_precio), len(sin_tiempo)
     fila = {"IdArticulo": codigo, "Descripcion": nombre,
             "CosteMaterial": coste_mat, "CosteOperacion": coste_op, "CosteTotal": coste_tot,
-            "Sin escandallo": n_esc, "Sin tipo": n_st, "Sin precio": n_sp,
+            # las dos alertas que la interfaz separa, y debajo el desglose de
+            # "Sin coste" en sus dos motivos, que se conservan por compatibilidad
+            # con los Excel ya repartidos.
+            "Sin coste": n_st + n_sp, "Sin escandallo": n_esc, "Sin tiempo": n_tie,
+            "Sin tipo": n_st, "Sin precio": n_sp,
+            # "Sin tiempo" NO tumba el Completo: en la interfaz es el aviso azul
+            # (informativo, la pieza está costeada en material), no la alerta roja
+            # de "Sin coste". El 10902001 se lee como completo teniéndolo.
             "Completo": "Sí" if (n_esc + n_st + n_sp) == 0 else "No"}
     return fila, faltantes
 
@@ -345,7 +413,8 @@ def lote():
 
     df_costes = pd.DataFrame(costes)
     df_falt = pd.DataFrame(faltantes) if faltantes else \
-        pd.DataFrame([{"Articulo": "", "IdComponente": "", "Descripcion": "", "Motivo": "(sin faltantes)"}])
+        pd.DataFrame([{"Articulo": "", "IdComponente": "", "Descripcion": "",
+                       "Alerta": "", "Motivo": "(sin faltantes)"}])
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xls:
