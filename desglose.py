@@ -709,6 +709,13 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
+        elif n.get("servicio") is not None or n.get("precio") is not None:
+            # TRABAJO EXTERNO (lacado, zincado, remachado...): tiene escandallo Y
+            # ADEMAS se compra. Lo hace un tercero fuera de GYC, asi que 0 min de
+            # mano de obra propia es CORRECTO, no un dato que falte (ver mismo
+            # cambio y comentario largo en app.py).
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
+            n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         else:
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 1; n["tiempo_efectivo"] = None

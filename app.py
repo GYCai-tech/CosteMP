@@ -113,6 +113,15 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
+        elif n.get("servicio") is not None or n.get("precio") is not None:
+            # TRABAJO EXTERNO (lacado, zincado, remachado...): el nodo tiene
+            # escandallo Y ADEMÁS se compra (ver coste_propio/SQL_SERVICIO_EXTERNO
+            # para la raíz, o la rama "c" de EsValorable para un hijo). Ese trabajo
+            # lo hace un tercero fuera de GYC, así que 0 min de mano de obra propia
+            # es CORRECTO, no un dato que falte -> no se avisa como "sin tiempo"
+            # (18103604 BASE...LACADA avisaba en falso al buscarlo directamente).
+            n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
+            n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         else:
             # fabricado pero sin ningún tiempo con el que costear
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
