@@ -76,13 +76,21 @@ WITH
 -- GYC FABRICA (PISO VARILLA, LATERAL NIDO SPRINT, MODULO RODEIRO...), donde el
 -- importe es una valoracion interna, no lo que pide un proveedor. Costear con eso
 -- es inventarse un precio de compra que nadie ha ofertado.
+-- Lineas con Descuento=100 se excluyen: son regalos/unidades gratis dentro de
+-- un pedido (misma FechaAlbaran/IdPedido que la linea real, p.ej. GRAPADORA
+-- MANUAL 25701001: 2 lineas del mismo pedido a 6,95, una al 0% y otra al 100%).
+-- Cuando es la mas reciente, el ROW_NUMBER la elegia y el descuento la dejaba
+-- en 0 EUR de coste sin avisar (Precio no es NULL -> no salta "Sin precio").
+-- Hay 4 casos en toda la base; en 3 de ellos es la UNICA compra que existe, asi
+-- que ahi no hay precio real que rescatar (cae a tarifa o a "sin precio", que
+-- es lo correcto: mejor avisar que enseñar un precio que nunca se pago).
 precio AS (
     SELECT IdArticulo, Precio, Descuento, 'albaran' AS Fuente FROM (
         SELECT IdArticulo, Precio_EURO AS Precio, Descuento,
                ROW_NUMBER() OVER (PARTITION BY IdArticulo
                                   ORDER BY FechaAlbaran DESC, IdPedido DESC) AS rn
         FROM dbo.Pedidos_Prov_Lineas
-        WHERE FechaAlbaran IS NOT NULL AND Precio_EURO > 0
+        WHERE FechaAlbaran IS NOT NULL AND Precio_EURO > 0 AND Descuento < 100
     ) t
     WHERE rn = 1
 
@@ -100,7 +108,8 @@ precio AS (
         WHERE lp.Precio > 0
           AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl
                           WHERE pl.IdArticulo = lp.IdArticulo
-                            AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0)
+                            AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0
+                            AND pl.Descuento < 100)
     ) t
     WHERE t.rn = 1
 ),
@@ -515,6 +524,7 @@ WITH candidatos AS (
     FROM dbo.Pedidos_Prov_Lineas pl
     WHERE pl.IdArticulo = :codigo
       AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0
+      AND COALESCE(pl.Descuento, 0) < 100   -- regalo/unidad gratis, no es precio real (ver CTE 'precio')
 
     UNION ALL
 
@@ -525,7 +535,8 @@ WITH candidatos AS (
     WHERE lp.IdArticulo = :codigo AND lp.Precio > 0
       AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl2
                       WHERE pl2.IdArticulo = :codigo
-                        AND pl2.FechaAlbaran IS NOT NULL AND pl2.Precio_EURO > 0)
+                        AND pl2.FechaAlbaran IS NOT NULL AND pl2.Precio_EURO > 0
+                        AND COALESCE(pl2.Descuento, 0) < 100)
 ),
 elegido AS (
     SELECT TOP 1 Precio FROM candidatos
