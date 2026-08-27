@@ -43,18 +43,18 @@ RATE_OP = 17.0 / 60.0   # 17 €/h operario -> €/min
 
 
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
-                    servicio_raiz=None, teorico_raiz=0):
+                    servicio_raiz=None, medio_raiz=0):
     """Árbol del escandallo con coste de MATERIAL (hojas compradas) y de OPERACIÓN
     (nodos fabricados = tiempo × 17 €/h), y el rollup material+operación por nodo.
 
     servicio_raiz: coste del trabajo externo del propio artículo buscado, que se
     suma a sus materiales (ver SQL_SERVICIO_EXTERNO en desglose.py).
-    teorico_raiz: 1 si el tiempo de la raíz sale de la media de bonos en vez de
+    medio_raiz: 1 si el tiempo de la raíz sale de la media de bonos en vez de
     la mano de obra imputada en el ERP."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
-            "tiempo": tiempo_raiz, "tiempo_teorico": int(teorico_raiz or 0),
+            "tiempo": tiempo_raiz, "tiempo_medio": int(medio_raiz or 0),
             "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -75,7 +75,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                 "sin_escandallo": int(r.get("SinEscandallo", 0) or 0),
                 "sin_operacion": int(r.get("SinOperacion", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
-                "tiempo_teorico": int(r.get("TiempoTeorico", 0) or 0),
+                "tiempo_medio": int(r.get("TiempoMedio", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -89,7 +89,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
         if n["es_hoja"]:
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
-        elif n.get("tiempo") is not None and not n.get("tiempo_teorico"):
+        elif n.get("tiempo") is not None and not n.get("tiempo_medio"):
             # mano de obra IMPUTADA en el ERP: es una declaración explícita de que
             # la pieza lleva trabajo, así que manda incluso sobre la casilla.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
@@ -108,8 +108,10 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None:
-            # tiempo teórico (media de partes), para las piezas que sí declaran
-            # operación. Se usa igual, marcado como "teórico" en la tabla.
+            # media de los bonos, para las piezas que sí declaran operación.
+            # Se usa igual, marcada como "medio" en la tabla: es la media REAL
+            # de lo que se tardó, no un tiempo teórico. El teórico sería el
+            # estándar de producción, que es la rama de arriba.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
@@ -163,9 +165,9 @@ def api_buscar():
 def api_desglose():
     codigo = request.args.get("codigo", "")
     df = desglose(codigo)
-    tiempo_raiz, teorico_raiz = tiempo_operacion(codigo)
+    tiempo_raiz, medio_raiz = tiempo_operacion(codigo)
     arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_raiz,
-                             sin_operacion(codigo), coste_propio(codigo), teorico_raiz)
+                             sin_operacion(codigo), coste_propio(codigo), medio_raiz)
              if not df.empty else None)
     return jsonify({
         "codigo": codigo,
@@ -363,9 +365,9 @@ def resumen_lote(codigo):
                        "Alerta": "Sin coste",
                        "Motivo": "Artículo no encontrado o sin despiece"}]
 
-    tiempo_raiz, teorico_raiz = tiempo_operacion(codigo)
+    tiempo_raiz, medio_raiz = tiempo_operacion(codigo)
     arbol = construir_arbol(df, codigo, nombre, tiempo_raiz, sin_operacion(codigo),
-                            coste_propio(codigo), teorico_raiz)
+                            coste_propio(codigo), medio_raiz)
     coste_mat = arbol["coste_mat"] if arbol else 0.0
     coste_op = arbol["coste_op_total"] if arbol else 0.0
     coste_tot = arbol["coste_total"] if arbol else 0.0

@@ -251,14 +251,14 @@ function renderRow(r) {
     : esc(n.tipo || '');
   // celda de tiempo: min de operación (ramas); aviso si es fabricado sin tiempo.
   // Si el tiempo NO viene de la mano de obra imputada en el ERP sino de la media
-  // de bonos, se marca "teórico" (a propósito NO va al panel de avisos: es un
+  // de bonos, se marca "medio" (a propósito NO va al panel de avisos: es un
   // tiempo utilizable, solo menos fiable).
   // tiempo_efectivo es el que de verdad se cobra: viene vacío si la casilla del
   // ERP dice "sin operación", aunque la pieza tenga partes fichados
   const tiempoCell = hoja ? '' : (n.sin_tiempo
       ? '<span style="color:#2563eb;font-size:11px">sin tiempo</span>'
       : n.tiempo_efectivo != null
-        ? t2(n.tiempo_efectivo) + (n.tiempo_teorico ? ' <span class="badge-teo">teórico</span>' : '')
+        ? t2(n.tiempo_efectivo) + (n.tiempo_medio ? ' <span class="badge-teo">medio</span>' : '')
       // fase declarada "Sin operación": no lleva mano de obra, no es un hueco
       : n.sin_operacion ? '<span style="color:#94a3b8;font-size:11px">sin operación</span>'
       : '');
