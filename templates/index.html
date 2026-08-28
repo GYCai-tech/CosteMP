@@ -183,10 +183,12 @@ async function cargar(codigo, desc) {
   // empieza a listar por sus hijos. Pero si la raiz misma lleva operacion
   // propia (empaquetado/retractilado del producto ya montado, sin pasar por
   // una fase intermedia — p.ej. los NIDO MADERA o el BEBEDERO AUTOMATICO
-  // COLGANTE), ese coste no aparecia en ninguna fila visible aunque si
-  // sumaba en la cabecera y en el TOTAL: se ensena la raiz como fila para
-  // que el importe tenga de donde salir.
-  })(data.arbol.hijos.length && !data.arbol.coste_op ? data.arbol.hijos : [data.arbol], 0, null);
+  // COLGANTE) o un trabajo externo propio (lacado, zincado... via
+  // SQL_SERVICIO_EXTERNO, campo "servicio"), ese coste no aparecia en
+  // ninguna fila visible aunque si sumaba en la cabecera y en el TOTAL: se
+  // ensena la raiz como fila para que el importe tenga de donde salir.
+  })(data.arbol.hijos.length && !data.arbol.coste_op && data.arbol.servicio == null
+     ? data.arbol.hijos : [data.arbol], 0, null);
 
   tbody.innerHTML = rows.map(renderRow).join('')
     + `<tr class="totrow">
