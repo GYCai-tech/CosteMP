@@ -7,4 +7,45 @@ services:
       - "5010:5000"
     env_file:
       - .env          # copia .env.example a .env con tus credenciales
+    environment:
+      # Dentro del contenedor la carpeta compartida se ve siempre en /datos,
+      # da igual donde este montada fuera. Esto pisa lo que ponga el .env.
+      - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
+    volumes:
+      - ${COSTES_DATOS_DIR:-./salidas}:/datos
     restart: unless-stopped
+
+  # Mantiene el coste al dia sin que nadie tenga que acordarse de nada.
+  # Va en su propio contenedor y no como hilo dentro de la web porque un
+  # recalculo de 4 minutos bloqueando el servidor web es mala idea, y porque
+  # asi se reinicia solo si se cae sin llevarse la aplicacion por delante.
+  costemp-vigilante:
+    build: .
+    image: costemp
+    container_name: costemp-vigilante
+    depends_on:
+      - costemp
+    env_file:
+      - .env
+    environment:
+      - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
+    volumes:
+      - ${COSTES_DATOS_DIR:-./salidas}:/datos
+    # Cada 10 min mira si alguien toco el ERP y recalcula SOLO si cambio algo
+    # (si no, tarda milisegundos). Y una pasada entera cada manana a las 9:00,
+    # que es la unica que detecta un articulo que vuelve a romperse porque se
+    # abrio una rama dentro de el.
+    command: python vigilar_costes.py --bucle 600 --completo-a 09:00
+    restart: unless-stopped
+
+# COSTES_DATOS_DIR es la carpeta compartida VISTA DESDE EL HOST. Se define en
+# el .env de cada maquina, porque no es la misma en el servidor que en un PC:
+#
+#   servidor Linux (10.0.0.12)   COSTES_DATOS_DIR=/mnt/costes
+#                                (montaje CIFS de \\gcdc001\goyco\06 Recursos
+#                                 tecnicos\IT\costes -- ver docs/despliegue.md)
+#
+#   PC de desarrollo             se deja sin definir y usa ./salidas. Montar
+#                                una unidad de red en Docker Desktop da mas
+#                                problemas que valor, y en el PC el fichero ya
+#                                lo escriben las tareas programadas.

@@ -20,6 +20,7 @@ medias, y si el proceso falla el dato anterior queda intacto.
 """
 import argparse
 import datetime as dt
+import os
 import pathlib
 import time
 
@@ -41,7 +42,14 @@ MOTIVOS = ("Sin tipo de aprovisionamiento", "Sin precio de compra",
 # Libro que lee Power Query desde el Excel de analisis. Se genera en cada
 # recalculo. Va aparte del libro de analisis a proposito: aquel tiene 32 hojas
 # con tablas dinamicas y openpyxl no sabe conservarlas.
-SALIDA = pathlib.Path(r"C:\Users\santiago.arce\Desktop\costes\datos_costes.xlsx")
+#
+# La ruta se configura con COSTES_SALIDA_XLSX porque en el servidor no hay
+# ningun escritorio de Windows: alli apunta a un volumen montado. Si la carpeta
+# no existe no pasa nada -- los datos siguen publicados en Postgres y servidos
+# por /costes/datos.xlsx, que es de donde puede leer cualquiera.
+SALIDA = pathlib.Path(os.getenv(
+    "COSTES_SALIDA_XLSX",
+    r"C:\Users\santiago.arce\Desktop\costes\datos_costes.xlsx"))
 
 HOJAS = {"Resumen": "core.v_coste_resumen",       # cuantos articulos y piezas quedan
          "Articulos": "core.v_coste_articulo",    # coste partido en MP y operacion
@@ -50,22 +58,32 @@ HOJAS = {"Resumen": "core.v_coste_resumen",       # cuantos articulos y piezas q
 
 
 def exportar_fichero(pg):
-    """Vuelca las tres vistas al libro que consume Excel."""
+    """Vuelca las vistas al libro que consume Excel.
+
+    Devuelve la ruta escrita, o None si no se pudo. Un fallo aqui NO tumba el
+    recalculo: lo que importa ya esta publicado en Postgres. Los dos casos
+    habituales son tener el .xlsx abierto en Excel (lo bloquea) y que la ruta
+    no exista, que es lo que pasa en el contenedor si no se monta el volumen.
+    """
     import pandas as pd                                   # solo hace falta aqui
 
-    SALIDA.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(SALIDA, engine="openpyxl") as xls:
-        for hoja, vista in HOJAS.items():
-            df = pd.read_sql(text(f"SELECT * FROM {vista}"), pg)
-            df = df.drop(columns=["orden"], errors="ignore")
-            df.to_excel(xls, sheet_name=hoja, index=False)
-            ws = xls.sheets[hoja]
-            for i, col in enumerate(df.columns, start=1):
-                ancho = max([len(str(col))] +
-                            [len(str(v)) for v in df[col].head(200)]) if len(df) \
-                        else len(str(col))
-                ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = \
-                    min(55, ancho + 2)
+    try:
+        SALIDA.parent.mkdir(parents=True, exist_ok=True)
+        with pd.ExcelWriter(SALIDA, engine="openpyxl") as xls:
+            for hoja, vista in HOJAS.items():
+                df = pd.read_sql(text(f"SELECT * FROM {vista}"), pg)
+                df = df.drop(columns=["orden"], errors="ignore")
+                df.to_excel(xls, sheet_name=hoja, index=False)
+                ws = xls.sheets[hoja]
+                for i, col in enumerate(df.columns, start=1):
+                    ancho = max([len(str(col))] +
+                                [len(str(v)) for v in df[col].head(200)]) if len(df) \
+                            else len(str(col))
+                    ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = \
+                        min(55, ancho + 2)
+    except OSError as ex:
+        print(f"  aviso: no se pudo escribir {SALIDA}: {ex}", flush=True)
+        return None
     return SALIDA
 
 
