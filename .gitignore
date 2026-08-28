@@ -6,3 +6,5 @@ salidas/
 .pytest_cache/
 # documentacion generada (se regenera desde su HTML, no se versiona)
 *.pdf
+# configuracion local de Claude Code (por maquina/usuario)
+.claude/
