@@ -5,3 +5,4 @@ pyodbc
 python-dotenv
 flask
 waitress
+psycopg2-binary

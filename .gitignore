@@ -8,3 +8,6 @@ salidas/
 *.pdf
 # configuracion local de Claude Code (por maquina/usuario)
 .claude/
+
+# scripts de usar y tirar para consultas puntuales
+scratch_*.py
