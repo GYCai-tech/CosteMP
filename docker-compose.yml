@@ -7,4 +7,34 @@ services:
       - "5010:5000"
     env_file:
       - .env          # copia .env.example a .env con tus credenciales
+    environment:
+      # Donde deja el libro que lee Power Query. Tiene que caer dentro del
+      # volumen de abajo para que se vea desde fuera del contenedor.
+      - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
+    volumes:
+      # Carpeta compartida desde la que Excel lee el fichero. En el servidor,
+      # cambiar ./salidas por la ruta de red que corresponda.
+      - ./salidas:/datos
+    restart: unless-stopped
+
+  # Mantiene el coste al dia sin que nadie tenga que acordarse de nada.
+  # Va en su propio contenedor y no como hilo dentro de la web porque un
+  # recalculo de 4 minutos bloqueando el servidor web es mala idea, y porque
+  # asi se reinicia solo si se cae sin llevarse la aplicacion por delante.
+  costemp-vigilante:
+    build: .
+    image: costemp
+    container_name: costemp-vigilante
+    depends_on:
+      - costemp
+    env_file:
+      - .env
+    environment:
+      - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
+    volumes:
+      - ./salidas:/datos
+    # Cada 10 min mira si alguien toco el ERP y recalcula SOLO si cambio algo
+    # (si no, tarda milisegundos). Y una pasada entera cada manana a las 9:00,
+    # que es la unica que detecta un articulo que vuelve a romperse.
+    command: python vigilar_costes.py --bucle 600 --completo-a 09:00
     restart: unless-stopped

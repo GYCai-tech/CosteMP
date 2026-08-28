@@ -81,22 +81,51 @@ def revisar(pg, completo=False):
     return True
 
 
+def toca_pasada_completa(hhmm, ultima):
+    """True si ya paso la hora de la pasada diaria y hoy no se ha hecho."""
+    if not hhmm:
+        return False
+    hoy = dt.date.today()
+    if ultima == hoy:
+        return False
+    h, m = (int(x) for x in hhmm.split(":"))
+    return dt.datetime.now().time() >= dt.time(h, m)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bucle", type=int, metavar="SEG",
                     help="vigilar cada SEG segundos en vez de salir")
     ap.add_argument("--completo", action="store_true",
                     help="al detectar cambios, recalcular el catalogo entero")
+    ap.add_argument("--completo-a", metavar="HH:MM", default=None,
+                    help="ademas, una pasada entera al dia a esa hora")
     args = ap.parse_args()
 
     pg = get_pg_engine()
     if not args.bucle:
         revisar(pg, args.completo)
         return
-    print(f"Vigilando el ERP cada {args.bucle}s. Ctrl+C para parar.", flush=True)
+
+    print(f"Vigilando el ERP cada {args.bucle}s." +
+          (f" Pasada completa diaria a las {args.completo_a}." if args.completo_a else ""),
+          flush=True)
+    ultima_completa = None
     while True:
         try:
-            revisar(pg, args.completo)
+            # La pasada entera va aparte de la vigilancia y NO se puede quitar:
+            # el recalculo rapido solo mira los articulos ya pendientes, asi que
+            # no ve uno hoy completo que vuelve a romperse porque se abrio una
+            # rama dentro de el.
+            if toca_pasada_completa(args.completo_a, ultima_completa):
+                print(f"{dt.datetime.now():%H:%M:%S}  pasada COMPLETA diaria...", flush=True)
+                r = exportar_costes.ejecutar(pg, solo_pendientes=False,
+                                             origen="programado")
+                print(f"          {r['completos']}/{r['articulos']} completos "
+                      f"en {r['duracion']}s", flush=True)
+                ultima_completa = dt.date.today()
+            else:
+                revisar(pg, args.completo)
         except Exception as ex:                                # noqa: BLE001
             # una caida de red no debe tumbar la vigilancia: se reintenta
             print(f"  ERROR: {str(ex)[:160]}", flush=True)
