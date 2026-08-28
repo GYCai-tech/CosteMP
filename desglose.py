@@ -112,6 +112,36 @@ precio AS (
                             AND pl.Descuento < 100)
     ) t
     WHERE t.rn = 1
+
+    UNION ALL
+
+    -- 3) ULTIMO RECURSO: linea de SUBCONTRATA (Trabajos_Subcontratas). Es el
+    -- trabajo externo -lacado, zincado- que se le hace a la pieza y que a veces
+    -- no llega a tener albaran ni tarifa a su nombre, porque se factura contra
+    -- la orden de trabajo y no contra el articulo. Sin esto, el 18101015
+    -- LATERAL IZQ. CASETA MARTIÑA (lacado) sale a 0,00 EUR teniendo su lacado
+    -- registrado a 4,24.
+    --
+    -- Se coge CosteUnit, no Coste: el importe por UNIDAD. La cantidad la
+    -- aplica el arbol como con cualquier otro precio (Cant x Precio), asi que
+    -- usar Coste -que ya viene multiplicado por Cantidad- lo contaria dos veces
+    -- en cuanto una linea traiga Cantidad <> 1.
+    SELECT IdArticulo, CosteUnit, 0, 'subcontrata' FROM (
+        SELECT ts.IdArticulo, ts.CosteUnit,
+               ROW_NUMBER() OVER (PARTITION BY ts.IdArticulo
+                                  ORDER BY ts.FechaInsertUpdate DESC, ts.IdTrabajo DESC) AS rn
+        FROM dbo.Trabajos_Subcontratas ts
+        WHERE ts.CosteUnit > 0
+          AND NOT EXISTS (SELECT 1 FROM dbo.Pedidos_Prov_Lineas pl
+                          WHERE pl.IdArticulo = ts.IdArticulo
+                            AND pl.FechaAlbaran IS NOT NULL AND pl.Precio_EURO > 0
+                            AND pl.Descuento < 100)
+          AND NOT EXISTS (SELECT 1 FROM dbo.Listas_Precios_Prov_Art lp2
+                          INNER JOIN dbo.Listas_Precios_Prov lc2 ON lc2.IdLista = lp2.IdLista
+                                                                AND lc2.IdProveedor <> '0'
+                          WHERE lp2.IdArticulo = ts.IdArticulo AND lp2.Precio > 0)
+    ) s
+    WHERE s.rn = 1
 ),
 -- MANO DE OBRA IMPUTADA A MANO (Trabajos_ManoObra). Es la fuente PREFERENTE de
 -- tiempo: produccion la rellena operacion a operacion en el ERP, asi que cuando
@@ -539,6 +569,16 @@ WITH candidatos AS (
                       WHERE pl2.IdArticulo = :codigo
                         AND pl2.FechaAlbaran IS NOT NULL AND pl2.Precio_EURO > 0
                         AND COALESCE(pl2.Descuento, 0) < 100)
+
+    UNION ALL
+
+    -- ULTIMO RECURSO: la linea de SUBCONTRATA. El trabajo externo a veces se
+    -- factura contra la orden de trabajo y no contra el articulo, asi que no
+    -- deja ni albaran ni tarifa a su nombre. CosteUnit, no Coste: el importe
+    -- por unidad (ver la misma nota en el CTE 'precio').
+    SELECT ts.CosteUnit, 3, ts.FechaInsertUpdate, ts.IdTrabajo
+    FROM dbo.Trabajos_Subcontratas ts
+    WHERE ts.IdArticulo = :codigo AND ts.CosteUnit > 0
 ),
 elegido AS (
     SELECT TOP 1 Precio FROM candidatos
