@@ -37,6 +37,11 @@ trap cleanup EXIT
 docker cp "$REPO_ROOT/app.py" "$CONTAINER:/app/app.py"
 docker cp "$REPO_ROOT/desglose.py" "$CONTAINER:/app/desglose.py"
 docker cp "$REPO_ROOT/db.py" "$CONTAINER:/app/db.py"
+# app.py importa web_costes al arrancar: sin estos dos el import falla
+# y mueren TODOS los tests con un ModuleNotFoundError que no explica nada
+docker cp "$REPO_ROOT/db_pg.py" "$CONTAINER:/app/db_pg.py"
+docker cp "$REPO_ROOT/web_costes.py" "$CONTAINER:/app/web_costes.py"
+docker cp "$REPO_ROOT/exportar_costes.py" "$CONTAINER:/app/exportar_costes.py"
 docker cp "$REPO_ROOT/templates/." "$CONTAINER:/app/templates/"
 docker cp "$REPO_ROOT/tests/." "$CONTAINER:/app/tests/"
 
