@@ -8,13 +8,11 @@ services:
     env_file:
       - .env          # copia .env.example a .env con tus credenciales
     environment:
-      # Donde deja el libro que lee Power Query. Tiene que caer dentro del
-      # volumen de abajo para que se vea desde fuera del contenedor.
+      # Dentro del contenedor la carpeta compartida se ve siempre en /datos,
+      # da igual donde este montada fuera. Esto pisa lo que ponga el .env.
       - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
     volumes:
-      # Carpeta compartida desde la que Excel lee el fichero. En el servidor,
-      # cambiar ./salidas por la ruta de red que corresponda.
-      - ./salidas:/datos
+      - ${COSTES_DATOS_DIR:-./salidas}:/datos
     restart: unless-stopped
 
   # Mantiene el coste al dia sin que nadie tenga que acordarse de nada.
@@ -32,9 +30,22 @@ services:
     environment:
       - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
     volumes:
-      - ./salidas:/datos
+      - ${COSTES_DATOS_DIR:-./salidas}:/datos
     # Cada 10 min mira si alguien toco el ERP y recalcula SOLO si cambio algo
     # (si no, tarda milisegundos). Y una pasada entera cada manana a las 9:00,
-    # que es la unica que detecta un articulo que vuelve a romperse.
+    # que es la unica que detecta un articulo que vuelve a romperse porque se
+    # abrio una rama dentro de el.
     command: python vigilar_costes.py --bucle 600 --completo-a 09:00
     restart: unless-stopped
+
+# COSTES_DATOS_DIR es la carpeta compartida VISTA DESDE EL HOST. Se define en
+# el .env de cada maquina, porque no es la misma en el servidor que en un PC:
+#
+#   servidor Linux (10.0.0.12)   COSTES_DATOS_DIR=/mnt/costes
+#                                (montaje CIFS de \\gcdc001\goyco\06 Recursos
+#                                 tecnicos\IT\costes -- ver docs/despliegue.md)
+#
+#   PC de desarrollo             se deja sin definir y usa ./salidas. Montar
+#                                una unidad de red en Docker Desktop da mas
+#                                problemas que valor, y en el PC el fichero ya
+#                                lo escriben las tareas programadas.
