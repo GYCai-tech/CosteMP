@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Las reglas del coste — Coste MP</title>
+<style>
+  @page { size:A4; margin:18mm 16mm 16mm; }
+  * { box-sizing:border-box; }
+  body { font:10.5pt/1.5 Georgia,"Times New Roman",serif; color:#1a1a1a; margin:0; }
+  h1,h2,h3,h4 { font-family:"Segoe UI",Arial,sans-serif; line-height:1.25; }
+
+  .portada { text-align:left; padding-bottom:1.2rem; border-bottom:2.5pt solid #1a1a1a;
+             margin-bottom:1.6rem; }
+  .portada .eyebrow { font-family:"Segoe UI",Arial,sans-serif; font-size:8pt;
+                      letter-spacing:.18em; text-transform:uppercase; color:#2e5a78;
+                      font-weight:700; margin:0 0 .35rem; }
+  .portada h1 { font-size:26pt; margin:0 0 .3rem; letter-spacing:-.5pt; }
+  .portada .sub { font-size:11pt; color:#4a5459; margin:0 0 .9rem; max-width:135mm; }
+  .portada .meta { font-family:"Segoe UI",Arial,sans-serif; font-size:8.5pt; color:#6b767c; }
+  .portada .meta span { margin-right:1.6rem; }
+
+  h2 { font-size:14pt; margin:0 0 .7rem; padding-bottom:.25rem;
+       border-bottom:1pt solid #c9d2d7; page-break-after:avoid; }
+  h2 .n { font-family:Consolas,monospace; font-size:10pt; color:#2e5a78; margin-right:.5rem; }
+  h3 { font-size:11pt; margin:1.1rem 0 .5rem; page-break-after:avoid; }
+  section { page-break-inside:auto; margin-bottom:1.6rem; }
+  p { margin:0 0 .6rem; }
+  code { font-family:Consolas,"Courier New",monospace; font-size:9pt;
+         background:#eef2f4; padding:.5pt 2.5pt; border-radius:2pt; }
+
+  /* escalera de decision: el orden es la regla */
+  .paso { border:.75pt solid #c9d2d7; border-bottom:none; padding:.55rem .75rem;
+          page-break-inside:avoid; }
+  .paso:first-of-type { border-radius:3pt 3pt 0 0; }
+  .paso:last-of-type { border-bottom:.75pt solid #c9d2d7; border-radius:0 0 3pt 3pt; }
+  .paso .cab { font-family:"Segoe UI",Arial,sans-serif; font-weight:600; font-size:10.5pt;
+               margin:0 0 .25rem; }
+  .paso .cab .num { display:inline-block; min-width:1.15rem; height:1.15rem;
+                    background:#1a1a1a; color:#fff; border-radius:50%;
+                    font-family:Consolas,monospace; font-size:8pt; text-align:center;
+                    line-height:1.15rem; margin-right:.45rem; }
+  .paso .cab .num.ok { background:#2f6b3c; }
+  .paso p { margin:0 0 .35rem; font-size:9.8pt; color:#33393d; }
+  .paso p:last-child { margin-bottom:0; }
+  pre { font-family:Consolas,"Courier New",monospace; font-size:8.5pt; background:#f2f5f6;
+        border-left:2pt solid #2e5a78; padding:.4rem .6rem; margin:.35rem 0;
+        white-space:pre-wrap; line-height:1.45; }
+
+  table { border-collapse:collapse; width:100%; font-size:9.3pt; margin:.4rem 0 .8rem;
+          page-break-inside:avoid; }
+  th,td { border:.5pt solid #c9d2d7; padding:.32rem .5rem; text-align:left; vertical-align:top; }
+  th { background:#eef2f4; font-family:"Segoe UI",Arial,sans-serif; font-size:8pt;
+       letter-spacing:.06em; text-transform:uppercase; color:#4a5459; }
+  td.m { font-family:Consolas,monospace; font-size:8.6pt; }
+
+  .nota { font-size:9.2pt; background:#f2f5f6; border-left:2.5pt solid #2e5a78;
+          padding:.5rem .7rem; margin:.5rem 0 .9rem; page-break-inside:avoid; color:#33393d; }
+  .etq { font-family:"Segoe UI",Arial,sans-serif; font-size:8pt; font-weight:700;
+         padding:.5pt 4pt; border-radius:2pt; white-space:nowrap; }
+  .e1{background:#f9ede4;color:#a64b14} .e2{background:#f9e8ea;color:#8a2b3c}
+  .e3{background:#e2f0ec;color:#1b6459} .e4{background:#e8ebf4;color:#45527a}
+  .e5{background:#e6f0e7;color:#2f6b3c}
+  .salto { page-break-before:always; }
+  footer { margin-top:1.5rem; padding-top:.7rem; border-top:.75pt solid #c9d2d7;
+           font-size:8.8pt; color:#6b767c; }
+</style>
+</head>
+<body>
+
+<div class="portada">
+  <p class="eyebrow">Coste MP · Referencia técnica</p>
+  <h1>Las reglas del coste</h1>
+  <p class="sub">Todas las condiciones que deciden qué se despieza, cómo se valora y por
+     qué salta cada aviso. Lo que hace el código, no lo que debería hacer.</p>
+  <p class="meta"><span><b>28 de agosto de 2026</b></span>
+     <span>desglose.py · app.py</span><span>Mano de obra 17 €/h</span></p>
+</div>
+
+<section>
+  <h2><span class="n">01</span>El recorrido, de principio a fin</h2>
+  <p>Costear un artículo son seis pasos encadenados. Cada uno usa lo que produjo el
+     anterior, y casi todos resuelven con la misma mecánica: <b>una lista de condiciones
+     en orden, donde manda la primera que se cumple</b>. El orden no es un detalle de
+     implementación — es la regla.</p>
+  <table>
+    <tr><th style="width:8%">Paso</th><th>Qué decide</th><th style="width:26%">Dónde</th></tr>
+    <tr><td class="m">1</td><td><b>Componentes</b> — qué cuelga de qué, a todos los niveles</td><td class="m">CTE componentes</td></tr>
+    <tr><td class="m">2</td><td><b>Precio</b> — cuánto vale comprar cada artículo</td><td class="m">CTE precio</td></tr>
+    <tr><td class="m">3</td><td><b>Valorable</b> — a quién se le aplica ese precio</td><td class="m">EsValorable</td></tr>
+    <tr><td class="m">4</td><td><b>Coste de material</b> — cantidad × precio, sumado en cascada</td><td class="m">rollup()</td></tr>
+    <tr><td class="m">5</td><td><b>Tiempo y coste de operación</b> — minutos × 17 €/h</td><td class="m">rollup()</td></tr>
+    <tr><td class="m">6</td><td><b>Avisos</b> — qué falta y de quién es</td><td class="m">avisos_arbol()</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">02</span>Qué cuenta como escandallo</h2>
+  <p>Un artículo tiene componentes por <b>dos vías</b>, y solo por esas dos. Si ninguna
+     aplica, el artículo es una <i>hoja</i> del árbol y hay que valorarlo a precio de compra.</p>
+
+  <div class="paso">
+    <p class="cab"><span class="num">1</span>Fase activa con entradas</p>
+    <p>La fase produce el artículo (<code>Fases_Salidas</code>) y consume materiales
+       (<code>Fases_Entradas</code>). Los componentes son las <b>entradas</b>.</p>
+<pre>Fases.Activa &lt;&gt; 0
+INNER JOIN Fases_Salidas    ← qué produce (sirve para encontrar la fase)
+INNER JOIN Fases_Entradas   ← qué consume (ESTO es el escandallo)</pre>
+    <p><b>Una fase activa sin entradas no cuenta.</b> El <code>INNER JOIN</code> no devuelve
+       filas, así que el artículo sigue siendo hoja. Marcar la casilla <i>Activa</i> no
+       sustituye a rellenar los materiales.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">2</span>Conjunto, solo si no hay fase activa</p>
+    <p>Filas de <code>Articulos_Conjuntos</code>, explotadas por sus <code>Unidades</code>.
+       Si el artículo tiene fase activa, <b>manda la fase</b> y las filas del conjunto se
+       ignoran para explotar.</p>
+<pre>WHERE NOT EXISTS (fase activa que saque este mismo artículo)</pre>
+  </div>
+
+  <p class="nota"><b>Dos cortacircuitos.</b> El CTE recursivo corta ciclos con
+    <code>Ruta NOT LIKE '%|hijo|%'</code>, que impide que A→B→A se repita para siempre. Y hay
+    un caso degenerado aparte: <b>152 conjuntos</b> cuyo único componente es el mismo
+    artículo que ya los lleva dentro por su fase. Ese bucle de dos nodos hacía desaparecer
+    el precio del NIDO MADERA sin avisar, y se excluye explícitamente.</p>
+</section>
+
+<section>
+  <h2><span class="n">03</span>De dónde sale el precio</h2>
+  <p>Tres fuentes, en orden estricto. <b>La segunda solo se mira si no hay ninguna de la
+     primera</b>, y la tercera solo si no hay ninguna de las dos anteriores. No se mezclan
+     ni se promedian.</p>
+
+  <div class="paso">
+    <p class="cab"><span class="num">1</span>Último albarán de compra</p>
+    <p>Lo que se pagó de verdad, en la compra más reciente.</p>
+<pre>FechaAlbaran IS NOT NULL
+Precio_EURO &gt; 0
+Descuento &lt; 100
+ORDER BY FechaAlbaran DESC, IdPedido DESC   → se coge la primera</pre>
+    <p>El <code>Descuento &lt; 100</code> descarta regalos y unidades gratis. Hay 4 casos en
+       toda la base; cuando la línea gratis era la más reciente, el artículo salía a 0 €
+       sin que saltara ningún aviso, porque el precio existía y no era nulo.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">2</span>Tarifa de proveedor real</p>
+    <p>Lo que el proveedor pide, no lo que se ha pagado. Se coge la más reciente por
+       <code>FechaInsertUpdate</code>.</p>
+<pre>IdProveedor &lt;&gt; '0'        ← nunca la lista del "Proveedor 0"
+Precio &gt; 0
+AND NOT EXISTS (ningún albarán válido para este artículo)</pre>
+    <p>Se marca en pantalla como precio de lista, para no confundir un precio de catálogo
+       con una compra real. <b>Ojo con las unidades</b>: tarifa y albarán pueden venir en
+       unidades distintas — cordón a 0,026 €/m en tarifa frente a 24,79 €/rollo en albarán.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">3</span>Línea de subcontrata</p>
+    <p>El trabajo externo —lacado, zincado— a veces se factura contra la orden de trabajo
+       y no contra el artículo, así que no deja ni albarán ni tarifa a su nombre.</p>
+<pre>Trabajos_Subcontratas.CosteUnit &gt; 0
+AND NOT EXISTS (albarán)  AND NOT EXISTS (tarifa de proveedor real)</pre>
+    <p>Se coge <code>CosteUnit</code> y <b>no</b> <code>Coste</code>: es el importe por unidad,
+       y la cantidad la aplica el árbol como con cualquier otro precio. <code>Coste</code> ya
+       viene multiplicado por <code>Cantidad</code> y lo contaría dos veces.</p>
+  </div>
+
+  <p class="nota"><b>La lista del «Proveedor 0» se excluye siempre.</b> No es un proveedor:
+    es el hueco genérico que creó la instalación del ERP en 2001, con vigencia caducada el
+    01/01/2021. Acumula 6.071 líneas, buena parte de artículos que GYC <b>fabrica</b>, donde
+    el importe es una valoración interna y no lo que pide nadie. Hay <b>4.788 artículos</b>
+    cuyo único precio está ahí: para la aplicación no tienen precio.</p>
+</section>
+
+<section class="salto">
+  <h2><span class="n">04</span>A quién se le aplica el precio</h2>
+  <p>Tener precio no basta. <code>EsValorable</code> decide si ese precio se usa, por
+     <b>tres vías independientes</b> — basta con cumplir una.</p>
+
+  <div class="paso">
+    <p class="cab"><span class="num">a</span>Tiene tipo de aprovisionamiento y es hoja</p>
+    <p>Alguien confirmó en la ficha que se compra, y no hay escandallo que explotar.
+       Es el caso normal de una compra.</p>
+<pre>IdTipoAprovisionamiento IS NOT NULL  AND  sin componentes</pre>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">b</span>Sin tipo, pero nunca tuvo fase</p>
+    <p>Solo puede ser una compra a la que falta rellenar el tipo. Se valora igual, en vez
+       de contarla como 0 € en silencio.</p>
+<pre>IdTipoAprovisionamiento IS NULL
+AND sin componentes
+AND NOT EXISTS (ninguna fila en Fases_Salidas)</pre>
+    <p>Las piezas con fase desactivada quedan fuera <b>a propósito</b>: esas siguen avisando
+       como «sin escandallo» en vez de valorarse como compra.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">c</span>Tiene escandallo <i>y además</i> se compra</p>
+    <p>Esa compra es el <b>trabajo que se le hace encima</b> —lacado, zincado, remachado— y
+       se <b>suma</b> al coste de sus componentes. El CUENCO LACADO cuesta 6,50 de cuenco en
+       bruto + 1,05 de lacado = 7,55.</p>
+<pre>tiene componentes  AND  NOT EXISTS en el CTE 'duplicado'</pre>
+  </div>
+
+  <h3>Los dos frenos de la vía (c)</h3>
+  <table>
+    <tr><th style="width:32%">Freno</th><th>Qué hace</th></tr>
+    <tr><td><b>Automático del 2 %</b></td>
+        <td>Si algún componente tiene un precio que no se aleja más de un 2 % del precio del
+            padre, ese componente <i>es</i> el artículo comprado hecho. Sumar el precio del
+            padre lo contaría dos veces, así que no se suma.</td></tr>
+    <tr><td><b>Lista <code>NO_SUMA_PROPIA</code></b><br>5 artículos</td>
+        <td>Casos que el freno no detecta porque su versión equivalente tiene un precio
+            bastante distinto. Van a mano: el 18104044 desvía un 4,8 % y <b>sí</b> hay que
+            sumarlo; el 18201029 desvía un 6,3 % y no. Ninguna banda separa los dos.</td></tr>
+  </table>
+
+  <p class="nota"><b>El freno se aplica al precio YA ELEGIDO</b>, no candidato a candidato.
+    Filtrando uno a uno, al descartar el precio bueno del 15101013 (91,00, que coincidía con
+    su componente) la consulta se quedaba con un albarán viejo de 72,35 que no coincidía, y
+    lo sumaba igual: <b>163,80 € en vez de 91,45 €</b>.</p>
+</section>
+
+<section>
+  <h2><span class="n">05</span>De dónde sale el tiempo</h2>
+  <p>Solo se pide tiempo a los nodos <b>fabricados</b> — los que tienen componentes. A una
+     compra nunca se le reprocha no tener minutos. Seis ramas, en orden.</p>
+
+  <div class="paso">
+    <p class="cab"><span class="num ok">1</span>Es hoja → 0 € correcto</p>
+    <p>Una compra. Sin coste de operación y sin aviso.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">2</span>Mano de obra imputada en la fase → tiempo real</p>
+    <p>De <code>Trabajos_ManoObra</code>. La <code>Duracion</code> viene en <b>días</b>, de ahí
+       el ×1440 para pasarla a minutos. Se suman las líneas de una misma fase y se agrupa por
+       artículo. <code>Duracion = 0</code> no es una medición, es la casilla sin rellenar, y
+       no cuenta.</p>
+    <p>Es una declaración explícita de que la pieza lleva trabajo, así que <b>manda incluso
+       sobre la casilla</b> de orden de trabajo.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num ok">3</span>Declarada «sin operación» → 0 € correcto</p>
+<pre>EXISTS (Trabajos_Fases con OrdenTrabajo = 0)
+AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
+    <p>Cero euros de mano de obra es lo correcto, no un dato que falte. <b>Manda sobre la
+       media de bonos</b>: hay 3 piezas declaradas sin operación que aun así tienen partes
+       fichados, y antes ese tiempo se colaba — dos piezas idénticas costaban distinto
+       según si alguien había fichado.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">4</span>Media de los bonos de producción → tiempo medio</p>
+    <p><code>AVG(TotalMinutos / TotalPiezas)</code> sobre los bonos con fase activa y
+       <code>TotalPiezas &gt; 0</code>. Se marca en pantalla como <span class="etq e5">medio</span>.</p>
+    <p>Es la media <b>real</b> de lo que se tardó, no un tiempo teórico — el teórico sería el
+       estándar de producción, que es la rama 2. La etiqueta estuvo invertida hasta el 27/08.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num ok">5</span>Trabajo externo → 0 € correcto</p>
+    <p>El nodo tiene escandallo y además se compra: el trabajo lo hace un tercero fuera de
+       GYC, así que 0 minutos de mano de obra propia es correcto.</p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">6</span>Nada de lo anterior → <span class="etq e4">Sin tiempo de operación</span></p>
+    <p>Fabricado y sin ningún dato con el que costear el trabajo.</p>
+  </div>
+
+  <p class="nota"><b>La casilla <code>OrdenTrabajo</code> es el único criterio</b> para declarar
+    que una pieza no lleva mano de obra. Antes se exigía además que el trabajo se <i>llamase</i>
+    «sin operación», y eso dejaba fuera 31 artículos con la casilla desmarcada pero nombre de
+    operación real (Lacar ×16, Cortar, Soldar, Punzonar, Inyectar, Estampar). El aviso se
+    sustituyó por el repaso manual en el ERP: si aparece un 0 € de operación sin explicación,
+    mirar ahí primero.</p>
+</section>
+
+<section class="salto">
+  <h2><span class="n">06</span>Las etiquetas de error</h2>
+  <p>Cada pieza del árbol pasa por <b>cuatro preguntas en orden</b>. La primera que la atrapa
+     decide su aviso; las siguientes ya no se miran. Por eso quitar una condición no silencia
+     una pieza: la manda al aviso siguiente.</p>
+
+  <div class="paso">
+    <p class="cab"><span class="num">1</span>¿Tiene componentes?</p>
+    <p>Es fabricada y su material sube de los hijos. Solo puede faltarle el tiempo →
+       <span class="etq e4">Sin tiempo de operación</span></p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num ok">2</span>¿Es hermana de nesting?</p>
+    <p>Está en <code>Articulos_Conjuntos</code>: sale de la misma chapa que otra pieza, y esa
+       otra ya pagó el material → <b>no avisa nada</b></p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">3</span>¿Tuvo fase alguna vez y hoy no le sirve?</p>
+    <p>Hay rastro en <code>Fases_Salidas</code>, luego se fabrica aquí, pero no hay fase activa
+       con materiales para costearla → <span class="etq e1">Sin escandallo activo</span></p>
+  </div>
+  <div class="paso">
+    <p class="cab"><span class="num">4</span>¿No tiene precio?</p>
+    <p>Se parte en dos según si alguien rellenó el tipo en la ficha →
+       <span class="etq e2">Sin tipo de aprovisionamiento</span>
+       <span class="etq e3">Sin precio de compra</span></p>
+  </div>
+
+  <h3>Las cuatro condiciones exactas</h3>
+  <table>
+    <tr><th style="width:26%">Aviso</th><th>Se cumple todo esto</th><th style="width:16%">Quién lo arregla</th></tr>
+    <tr><td><span class="etq e1">Sin escandallo activo</span></td>
+        <td>sin componentes · sin precio válido · <b>existe</b> en <code>Fases_Salidas</code> ·
+            <b>no</b> está en <code>Articulos_Conjuntos</code></td><td>Producción</td></tr>
+    <tr><td><span class="etq e2">Sin tipo de aprovisionamiento</span></td>
+        <td>sin componentes · sin precio · <b>sin</b> rastro en <code>Fases_Salidas</code> ·
+            tipo <b>vacío</b> en la ficha</td><td>por decidir</td></tr>
+    <tr><td><span class="etq e3">Sin precio de compra</span></td>
+        <td>igual que el anterior pero con el tipo <b>relleno</b>: alguien confirmó que se
+            compra</td><td>Compras</td></tr>
+    <tr><td><span class="etq e4">Sin tiempo de operación</span></td>
+        <td>tiene componentes · sin mano de obra imputada · no declarada «sin operación» ·
+            sin bonos · no es trabajo externo</td><td>Producción</td></tr>
+  </table>
+
+  <p class="nota"><b>«Sin tipo» es el aviso más engañoso.</b> El nombre sugiere que falta
+    rellenar un campo, pero lo que dice de verdad es que <b>la aplicación no sabe qué es esa
+    pieza</b>: puede ser una compra sin precio o una pieza fabricada sin escandallo, y no hay
+    ningún dato en el ERP que las separe.</p>
+
+  <p class="nota"><b>Un aviso de «sin escandallo» es además un tapón.</b> La aplicación no
+    puede ver lo que cuelga por debajo de una rama cerrada, así que arreglar un escandallo a
+    veces <b>aumenta</b> el número de huecos: al abrirse la rama aparecen piezas que nadie
+    había contado. El 10201001 pasó de 1 hueco a 5 al abrirse el 10208001.</p>
+</section>
+
+<section>
+  <h2><span class="n">07</span>Las etiquetas de la tabla</h2>
+  <p>Distintas de los avisos: describen <b>qué es cada fila</b>, no qué le falta. Solo
+     «sin escandallo» es a la vez etiqueta y aviso.</p>
+  <table>
+    <tr><th style="width:26%">Etiqueta</th><th>Qué dice</th></tr>
+    <tr><td><b>de conjunto</b></td><td>Vale 0 € a propósito: el material lo paga su hermana de nesting. No es un hueco.</td></tr>
+    <tr><td><b>sin escandallo</b></td><td>Se fabrica aquí pero no hay fase activa con la que costearla.</td></tr>
+    <tr><td><b>trabajo sobre la pieza</b></td><td>Se compra un trabajo —lacado, zincado— que se suma a sus materiales.</td></tr>
+    <tr><td><b>compra sin tipo</b></td><td>Se ha valorado por albarán aunque falte el tipo en la ficha.</td></tr>
+    <tr><td><b>fabricado</b></td><td>Es una rama: su coste sube de los hijos.</td></tr>
+    <tr><td><b>medio</b></td><td>El tiempo es la media de los bonos, no mano de obra imputada.</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">08</span>Cómo se suman los euros</h2>
+  <table>
+    <tr><th style="width:28%">Concepto</th><th style="width:36%">Fórmula</th><th>Notas</th></tr>
+    <tr><td><b>Coste de material</b> de una línea</td>
+        <td class="m">Cant × (Precio − Precio × Descuento/100)</td>
+        <td>Solo si la fila es valorable y tiene precio</td></tr>
+    <tr><td><b>Coste de operación</b> de una línea</td>
+        <td class="m">min/pieza × Cant × 17/60</td><td>Solo nodos fabricados</td></tr>
+    <tr><td><b>Rollup</b> de un nodo</td>
+        <td class="m">lo suyo + todo lo que cuelga</td>
+        <td>Redondeo a <b>6 decimales</b>, no a 4</td></tr>
+    <tr><td><b>Cantidades</b></td><td class="m">gr → kg dividiendo entre 1.000</td>
+        <td>Ya vienen multiplicadas en cascada por el CTE</td></tr>
+  </table>
+  <p class="nota"><b>Por qué 6 decimales y no 4.</b> Con 4, un coste de 8,5·10⁻⁶ € se
+    redondeaba a 0,0 exacto, la línea desaparecía del árbol y además se disparaba como
+    «sin coste».</p>
+
+  <h3>El reparto del Resumen</h3>
+  <table>
+    <tr><th style="width:28%">Columna</th><th>Qué suma</th></tr>
+    <tr><td><b>Coste MATERIA PRIMA</b></td><td class="m">filas valoradas con TipoCompra = 'MATERIA PRIMA'</td></tr>
+    <tr><td><b>Coste MERCADERÍA</b></td><td class="m">filas valoradas con TipoCompra = 'MERCADERIA'</td></tr>
+    <tr><td><b>Otros</b></td><td class="m">el resto: total − materia prima − mercadería</td></tr>
+  </table>
+  <p class="nota"><b>Ese reparto depende de un campo manual y sin validar.</b> Solo 2.531 de
+    25.602 artículos tienen tipo de aprovisionamiento relleno, y una misma familia se reparte
+    entre cuatro tipos distintos. Todo lo que no sea exactamente MATERIA PRIMA o MERCADERIA
+    cae en «Otros», incluidos los cuatro tipos restantes y los artículos sin tipo.</p>
+</section>
+
+<section>
+  <h2><span class="n">09</span>Constantes y listas a mano</h2>
+  <table>
+    <tr><th style="width:24%">Qué</th><th style="width:22%">Valor</th><th>Por qué está a mano</th></tr>
+    <tr><td class="m">RATE_OP</td><td class="m">17 €/h → €/min</td>
+        <td>Tarifa única de operario, sin distinguir puesto ni turno</td></tr>
+    <tr><td class="m">NO_SUMA_PROPIA</td><td class="m">5 artículos</td>
+        <td>El freno del 2 % no los separa de un lacado legítimo</td></tr>
+    <tr><td class="m">IdProveedor = '0'</td><td class="m">excluido siempre</td>
+        <td>Lista técnica caducada en 2021, con valoraciones internas</td></tr>
+    <tr><td class="m">Bucle conjunto ↔ fase</td><td class="m">152 conjuntos</td>
+        <td>Ciclo degenerado de dos nodos que borraba precios sin avisar</td></tr>
+  </table>
+</section>
+
+<footer>
+  <p>Las condiciones descritas se corresponden con <code>desglose.py</code> (componentes,
+     precio, valorable, tiempo) y <code>app.py</code> (rollup y clasificación de avisos).
+     Los ejemplos citados son casos reales que provocaron cada regla.</p>
+  <p>Los datos del ERP cambian a lo largo del día: cualquier recuento es una foto, no un saldo.</p>
+</footer>
+
+</body>
+</html>
