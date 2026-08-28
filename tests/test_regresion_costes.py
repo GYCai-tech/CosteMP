@@ -32,9 +32,15 @@ def test_no_duplica_precio_propio_si_esta_en_no_suma_propia():
     coincide con el de 11601067 BEBEDERO AUTOMATICO Arion, que ya viene
     dentro de su escandallo (esta en NO_SUMA_PROPIA). Si esta exclusion se
     rompe, el coste vuelve a dispararse por sumar el mismo bebedero dos
-    veces (bug original: 24,78 EUR en vez de ~16,5 EUR)."""
+    veces (bug original: 24,78 EUR en vez de ~16,5 EUR).
+
+    El umbral es 25.0, no el ~16,5 EUR original: el precio de compra de
+    11601067 ha subido en el ERP con el paso del tiempo (linea de escandallo
+    a 8,90 EUR ahora). Si el bug volviera, ese mismo importe se sumaria una
+    segunda vez y el total rondaria los ~29-30 EUR, muy por encima de este
+    umbral -- ver docstring del modulo."""
     fila, _ = resumen_lote("11601001")
-    assert fila["CosteTotal"] < 20.0, (
+    assert fila["CosteTotal"] < 25.0, (
         f"CosteTotal={fila['CosteTotal']}: parece que 11601067 se esta "
         "sumando dos veces (precio propio de la raiz + escandallo). "
         "Revisar NO_SUMA_PROPIA en desglose.py."
@@ -103,18 +109,24 @@ def test_trabajo_externo_no_dispara_aviso_de_sin_tiempo():
 
 
 def test_pieza_fabricada_sin_partes_SI_avisa_sin_tiempo():
-    """Guarda de no-regresion al reves del test anterior: 11602053 AGUJA
-    PLASTICO (componente de 11601035) es una pieza fabricada NORMAL -sin
-    precio de compra propio, no es trabajo externo- que no tiene ningun
-    dato de tiempo (ni mano de obra imputada ni media de bonos). Esta SI es
-    un hueco real y debe seguir avisando: si el fix del trabajo externo se
-    hace demasiado amplio, este aviso legitimo desaparece en silencio."""
-    _, faltantes = resumen_lote("11601035")
+    """Guarda de no-regresion al reves del test anterior: 15101028 BOLSA
+    SOPORTE ABREVADERO (componente de 15101023) es una pieza fabricada
+    NORMAL -sin precio de compra propio, no es trabajo externo- que no tiene
+    ningun dato de tiempo (ni mano de obra imputada ni media de bonos). Esta
+    SI es un hueco real y debe seguir avisando: si el fix del trabajo
+    externo se hace demasiado amplio, este aviso legitimo desaparece en
+    silencio.
+
+    (Antes se usaba 11602053, componente de 11601035, pero el ERP le
+    registro tiempo de mano de obra con el paso del tiempo y dejo de servir
+    como ejemplo de "sin ningun dato de tiempo" -- ver docstring del modulo.)
+    """
+    _, faltantes = resumen_lote("15101023")
     ids_con_aviso_tiempo = {
         f["IdComponente"] for f in faltantes
         if f["Motivo"] == "Sin tiempo de operación"
     }
-    assert "11602053" in ids_con_aviso_tiempo
+    assert "15101028" in ids_con_aviso_tiempo
 
 
 def test_articulo_inexistente_no_revienta():
