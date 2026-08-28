@@ -89,6 +89,25 @@ Correr antes de tocar `desglose.py` o `app.py` (sobre todo la parte del CTE
 recursivo, `NO_SUMA_PROPIA`, o el cálculo de tiempo/operación) para
 comprobar que no se ha reintroducido ninguno de estos bugs.
 
+### Gate local: no hacer push si fallan los tests
+
+Hay un hook `pre-push` versionado en `scripts/git-hooks/` que lanza un
+contenedor efímero a partir de `costemp:latest` (misma imagen que producción,
+ya trae pytest) y corre `pytest tests/` antes de dejar salir el `git push`. Si
+fallan, el push se cancela.
+
+Para activarlo en un clon del repo (una vez):
+```bash
+git config core.hooksPath scripts/git-hooks
+```
+Requiere tener la imagen construida (`docker build -t costemp .`) y el `.env`
+con credenciales del ERP. Se puede saltar puntualmente con
+`git push --no-verify`.
+
+En GitHub, `.github/workflows/tests.yml` corre los mismos tests en cada push
+y pull request (self-hosted runner, porque necesita alcanzar el ERP), como
+segunda comprobación además del hook local.
+
 ## Estructura
 
 | Archivo | Qué hace |

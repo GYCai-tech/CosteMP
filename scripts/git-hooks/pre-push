@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Pre-push: no deja hacer "git push" si los tests de regresión (tests/) no
+# pasan. Usa la imagen ya construida costemp:latest (trae pytest, ver
+# requirements-dev.txt y Dockerfile) en un contenedor efímero, igual que hace
+# .github/workflows/tests.yml en CI, para no tocar el contenedor "costemp" en
+# marcha (producción).
+#
+# Instalado vía `git config core.hooksPath scripts/git-hooks` (ver README).
+# Se puede saltar puntualmente con: git push --no-verify
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CONTAINER=costemp-prepush
+IMAGE=costemp:latest
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "pre-push: docker no está disponible, no se pueden correr los tests. Usa --no-verify si quieres saltarlo." >&2
+  exit 1
+fi
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "pre-push: no existe la imagen $IMAGE (docker build -t costemp .). No se pueden correr los tests." >&2
+  exit 1
+fi
+
+echo "pre-push: levantando contenedor temporal de tests ($CONTAINER)..."
+docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+docker run -d --name "$CONTAINER" \
+  --env-file "$REPO_ROOT/.env" \
+  "$IMAGE" tail -f /dev/null >/dev/null
+
+cleanup() {
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker cp "$REPO_ROOT/app.py" "$CONTAINER:/app/app.py"
+docker cp "$REPO_ROOT/desglose.py" "$CONTAINER:/app/desglose.py"
+docker cp "$REPO_ROOT/db.py" "$CONTAINER:/app/db.py"
+docker cp "$REPO_ROOT/templates/." "$CONTAINER:/app/templates/"
+docker cp "$REPO_ROOT/tests/." "$CONTAINER:/app/tests/"
+
+echo "pre-push: ejecutando pytest tests/ -v ..."
+if docker exec -w /app "$CONTAINER" python -m pytest tests/ -v; then
+  echo "pre-push: tests OK, continúa el push."
+  exit 0
+else
+  echo "pre-push: los tests han fallado. Push cancelado (usa 'git push --no-verify' para saltarlo si es intencional)." >&2
+  exit 1
+fi
