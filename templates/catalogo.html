@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Artículos del catálogo</title>
+<style>
+  :root {
+    --tinta:#1a1d21; --suave:#5b666d; --tenue:#8a959b;
+    --fondo:#f5f7f8; --panel:#fff; --linea:#dde4e8;
+    --acento:#2e5a78; --ok:#2f6b3c; --mal:#a3232b; --malsuave:#fdf2f2;
+    --esc:#a64b14; --tipo:#8a2b3c; --prec:#1b6459; --tiempo:#45527a;
+    --rejilla:#d6dde1; --cabecera:#eef2f4;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--tinta);
+         font:15px/1.5 "Segoe UI",system-ui,sans-serif; }
+  .caja { max-width:1240px; margin:0 auto; padding:28px 20px 64px; }
+  h1 { font-size:25px; margin:0 0 3px; letter-spacing:-.02em; }
+  .sub { color:var(--suave); margin:0 0 24px; font-size:14px; }
+  a { color:var(--acento); }
+
+  .cifras { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+            gap:12px; margin-bottom:22px; }
+  .cifra { background:var(--panel); border:1px solid var(--linea); border-radius:8px;
+           padding:13px 15px; }
+  .cifra .n { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .cifra .t { font-size:11.5px; color:var(--tenue); text-transform:uppercase;
+              letter-spacing:.07em; margin-top:2px; }
+  .cifra.bien .n { color:var(--ok); } .cifra.mal .n { color:var(--mal); }
+
+  .filtros { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
+  input[type=search], select { font:inherit; padding:7px 10px; border:1px solid var(--linea);
+        border-radius:6px; background:var(--panel); color:var(--tinta); }
+  input[type=search] { min-width:280px; }
+  #cuenta { color:var(--tenue); font-size:13px; margin-left:auto; }
+
+  /* aspecto de hoja de calculo: rejilla completa y filas compactas, para que
+     se lea igual que el Excel del que viene la gente */
+  .scroll { overflow:auto; max-height:calc(100vh - 250px); background:var(--panel);
+            border:1px solid var(--rejilla); }
+  table { border-collapse:separate; border-spacing:0; width:100%;
+          font-size:13.5px; font-variant-numeric:tabular-nums; }
+  th,td { text-align:left; padding:4px 9px; white-space:nowrap;
+          border-right:1px solid var(--rejilla); border-bottom:1px solid var(--rejilla); }
+  td.ancho { white-space:normal; min-width:230px; }
+  th { font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+       color:var(--suave); background:var(--cabecera); position:sticky; top:0; z-index:2;
+       cursor:pointer; user-select:none; }
+  th.num, td.num { text-align:right; }
+  td.fila { background:var(--cabecera); color:var(--tenue); text-align:right;
+            font-size:11.5px; position:sticky; left:0; z-index:1; width:1%; }
+  code { font:inherit; font-family:Consolas,"Courier New",monospace; }
+
+  tr.art { cursor:pointer; }
+  tr.art:hover td { background:#f8fafb; }
+  tr.art.problema td:first-child { box-shadow:inset 3px 0 0 var(--mal); }
+  tr.art.problema .est { color:var(--mal); font-weight:600; }
+  tr.art.ok .est { color:var(--ok); }
+  .flecha { display:inline-block; width:12px; color:var(--tenue); }
+  tr.art.abierta .flecha { transform:rotate(90deg); }
+
+  tr.detalle > td { background:var(--malsuave); padding:0; }
+  .det { padding:12px 16px 14px 30px; }
+  .det h4 { margin:0 0 8px; font-size:12px; text-transform:uppercase;
+            letter-spacing:.07em; color:var(--mal); }
+  .det table { background:transparent; }
+  .det th { background:transparent; position:static; cursor:default; }
+  .det td, .det th { border-bottom:1px solid #f2dede; padding:6px 10px; }
+  .etq { display:inline-block; font-size:11px; font-weight:600; padding:2px 7px;
+         border-radius:99px; white-space:nowrap; background:#fff; }
+  .m1 { color:var(--esc); } .m2 { color:var(--tipo); }
+  .m3 { color:var(--prec); } .m4 { color:var(--tiempo); }
+  .vacio { padding:28px; text-align:center; color:var(--tenue); }
+
+  tr.filtrofila th { padding:3px 5px; background:#fbfcfd; position:sticky; top:26px;
+                     cursor:default; }
+  tr.filtrofila input, tr.filtrofila select {
+        width:100%; min-width:0; font:inherit; font-size:12.5px; padding:4px 6px;
+        border:1px solid var(--linea); border-radius:4px; background:#fff; }
+  tr.filtrofila input.n { text-align:right; }
+  .limpiar { font:inherit; font-size:12.5px; padding:5px 10px; border-radius:6px;
+             border:1px solid var(--linea); background:var(--panel);
+             color:var(--suave); cursor:pointer; }
+  .limpiar:hover { border-color:var(--acento); color:var(--acento); }
+</style>
+</head>
+<body>
+<div class="caja">
+
+  <h1>Artículos del catálogo</h1>
+  <p class="sub">Coste desglosado en materia prima y operación.
+     Los artículos en rojo tienen algún dato sin cubrir: pulsa la fila para ver qué le falta.
+     <a href="/">Volver al buscador</a></p>
+
+  <div class="cifras" id="cifras"></div>
+
+  <div class="filtros">
+    <input type="search" id="buscar" placeholder="Buscar código, descripción o familia…"
+           oninput="pintar()">
+    <select id="fProblema" onchange="pintar()">
+      <option value="">Cualquier problema</option>
+      <option value="sin_escandallo">Con piezas sin escandallo</option>
+      <option value="sin_tipo">Con piezas sin tipo</option>
+      <option value="sin_precio">Con piezas sin precio</option>
+      <option value="sin_tiempo">Con piezas sin tiempo</option>
+    </select>
+    <button class="limpiar" onclick="limpiar()">Limpiar filtros</button>
+    <span id="cuenta"></span>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th style="cursor:default"></th>
+        <th data-col="id">Artículo</th>
+        <th data-col="desc">Descripción</th>
+        <th data-col="familia">Familia</th>
+        <th data-col="mp"    class="num">Materia prima €</th>
+        <th data-col="op"    class="num">Operación €</th>
+        <th data-col="total" class="num">Total €</th>
+        <th data-col="probl" class="num">Problemas</th>
+        <th data-col="estado">Estado</th>
+      </tr>
+      <tr class="filtrofila">
+        <th></th>
+        <th><input id="f_id"      placeholder="código"      oninput="pintar()"></th>
+        <th><input id="f_desc"    placeholder="descripción" oninput="pintar()"></th>
+        <th><select id="f_familia" onchange="pintar()"><option value="">Todas</option></select></th>
+        <th><input id="f_mp"    class="n" type="number" placeholder="≥ €" oninput="pintar()"></th>
+        <th><input id="f_op"    class="n" type="number" placeholder="≥ €" oninput="pintar()"></th>
+        <th><input id="f_total" class="n" type="number" placeholder="≥ €" oninput="pintar()"></th>
+        <th><input id="f_probl" class="n" type="number" placeholder="≥ nº" oninput="pintar()"></th>
+        <th><select id="f_estado" onchange="pintar()">
+              <option value="">Todos</option>
+              <option value="ok">Completo</option>
+              <option value="mal">Faltan datos</option>
+              <option value="err">Error</option>
+            </select></th>
+      </tr></thead>
+      <tbody id="cuerpo"></tbody>
+    </table>
+    <div class="vacio" id="vacio" style="display:none">Nada que mostrar con ese filtro.</div>
+  </div>
+
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let ARTS = [], orden = {col:"id", asc:true}, abiertas = new Set();
+
+const MOTIVO = {"Sin escandallo activo":"m1",
+                "Sin tipo de aprovisionamiento":"m2",
+                "Sin precio de compra":"m3",
+                "Sin tiempo de operación":"m4"};
+
+// el texto viene del ERP: puede traer & o < y romperia el HTML
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const eur = v => v == null ? "—"
+  : Number(v).toLocaleString("es-ES", {minimumFractionDigits:2, maximumFractionDigits:2});
+
+// un artículo esta MAL si le falta coste de material. "Sin tiempo" no cuenta:
+// el material esta costeado y es el criterio del resto de la aplicacion.
+const problemas = a => (a.sin_escandallo||0) + (a.sin_tipo||0) + (a.sin_precio||0);
+const roto = a => problemas(a) > 0 || a.error;
+
+fetch("/catalogo/datos").then(r => r.json()).then(d => {
+  ARTS = d; cabecera(); familias(); pintar();
+});
+
+// el desplegable de familia se construye con lo que hay, no con una lista fija:
+// asi no aparecen familias vacias ni faltan las nuevas
+function familias() {
+  const f = [...new Set(ARTS.map(a => a.familia).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es"));
+  $("#f_familia").insertAdjacentHTML("beforeend",
+    f.map(x => `<option>${esc(x)}</option>`).join(""));
+}
+
+function limpiar() {
+  ["buscar","f_id","f_desc","f_mp","f_op","f_total","f_probl"].forEach(i => $("#"+i).value = "");
+  ["f_familia","f_estado","fProblema"].forEach(i => $("#"+i).value = "");
+  pintar();
+}
+
+const num = id => { const v = $("#"+id).value; return v === "" ? null : Number(v); };
+const tiene = (a,s) => s ? (a[s]||0) > 0 : true;
+
+function cabecera() {
+  const mal = ARTS.filter(roto).length;
+  $("#cifras").innerHTML = `
+    <div class="cifra"><div class="n">${ARTS.length}</div><div class="t">Artículos</div></div>
+    <div class="cifra bien"><div class="n">${ARTS.length - mal}</div><div class="t">Completos</div></div>
+    <div class="cifra mal"><div class="n">${mal}</div><div class="t">Con problemas</div></div>`;
+}
+
+document.querySelectorAll("th[data-col]").forEach(th => th.onclick = () => {
+  const c = th.dataset.col;
+  orden = {col:c, asc: orden.col === c ? !orden.asc : true};
+  pintar();
+});
+
+function pintar() {
+  const q    = $("#buscar").value.trim().toLowerCase();
+  const fId  = $("#f_id").value.trim().toLowerCase();
+  const fDes = $("#f_desc").value.trim().toLowerCase();
+  const fFam = $("#f_familia").value;
+  const fEst = $("#f_estado").value;
+  const fPro = $("#fProblema").value;
+  const mMp = num("f_mp"), mOp = num("f_op"), mTot = num("f_total"), mPr = num("f_probl");
+
+  let v = ARTS.filter(a => {
+    if (q && !(a.id + " " + a.desc + " " + (a.familia||"")).toLowerCase().includes(q)) return false;
+    if (fId  && !a.id.toLowerCase().includes(fId)) return false;
+    if (fDes && !String(a.desc||"").toLowerCase().includes(fDes)) return false;
+    if (fFam && a.familia !== fFam) return false;
+    if (mMp  != null && Number(a.mp    || 0) < mMp)  return false;
+    if (mOp  != null && Number(a.op    || 0) < mOp)  return false;
+    if (mTot != null && Number(a.total || 0) < mTot) return false;
+    if (mPr  != null && problemas(a) < mPr) return false;
+    if (fEst === "ok"  && roto(a)) return false;
+    if (fEst === "mal" && (!roto(a) || a.error)) return false;
+    if (fEst === "err" && !a.error) return false;
+    if (!tiene(a, fPro)) return false;
+    return true;
+  });
+
+  const k = orden.col;
+  v.sort((a,b) => {
+    const va = k === "probl" ? problemas(a) : k === "estado" ? (roto(a)?1:0) : a[k];
+    const vb = k === "probl" ? problemas(b) : k === "estado" ? (roto(b)?1:0) : b[k];
+    const n = (typeof va === "number" || !isNaN(va)) && va !== null && vb !== null
+      ? Number(va) - Number(vb)
+      : String(va ?? "").localeCompare(String(vb ?? ""), "es");
+    return orden.asc ? n : -n;
+  });
+
+  $("#cuenta").textContent = v.length === ARTS.length
+    ? `${ARTS.length} artículos` : `${v.length} de ${ARTS.length} artículos`;
+  $("#vacio").style.display = v.length ? "none" : "block";
+
+  $("#cuerpo").innerHTML = v.map((a, i) => {
+    const n = problemas(a), malo = roto(a);
+    return `<tr class="art ${malo?"problema":"ok"} ${abiertas.has(a.id)?"abierta":""}"
+                data-id="${a.id}" onclick="alternar('${a.id}')">
+      <td class="fila">${i + 1}</td>
+      <td><span class="flecha">${malo ? "▸" : "&nbsp;"}</span> <code>${a.id}</code></td>
+      <td class="ancho">${esc(a.desc)}</td>
+      <td>${esc(a.familia || "")}</td>
+      <td class="num">${eur(a.mp)}</td>
+      <td class="num">${eur(a.op)}</td>
+      <td class="num"><b>${eur(a.total)}</b></td>
+      <td class="num">${n || ""}</td>
+      <td class="est">${a.error ? "Error" : malo ? "Faltan datos" : "Completo"}</td>
+    </tr>` + (abiertas.has(a.id)
+      ? `<tr class="detalle" data-det="${a.id}"><td colspan="9">
+           <div class="det" id="det-${a.id}">Cargando…</div></td></tr>` : "");
+  }).join("");
+
+  abiertas.forEach(id => { if (v.some(a => a.id === id)) cargar(id); });
+}
+
+function alternar(id) {
+  abiertas.has(id) ? abiertas.delete(id) : abiertas.add(id);
+  pintar();
+}
+
+function cargar(id) {
+  const caja = document.getElementById("det-" + id);
+  if (!caja || caja.dataset.hecho) return;
+  fetch(`/catalogo/${id}/huecos`).then(r => r.json()).then(h => {
+    caja.dataset.hecho = "1";
+    const art = ARTS.find(a => a.id === id);
+    if (art && art.error) {
+      caja.innerHTML = `<h4>Error</h4><p style="margin:0">${esc(art.error)}</p>`;
+      return;
+    }
+    if (!h.length) { caja.innerHTML = "<h4>Sin problemas registrados</h4>"; return; }
+    caja.innerHTML = `<h4>${h.length} pieza${h.length>1?"s":""} con datos sin cubrir</h4>
+      <table><thead><tr>
+        <th>Pieza</th><th>Descripción</th><th>Tipo</th><th>Familia</th><th>Qué le falta</th>
+      </tr></thead><tbody>` +
+      h.map(p => `<tr>
+        <td><code>${p.pieza}</code></td>
+        <td>${esc(p.desc)}</td>
+        <td>${esc(p.tipo)}</td>
+        <td>${esc(p.familia)}</td>
+        <td><span class="etq ${MOTIVO[p.motivo]||""}">${esc(p.motivo)}</span></td>
+      </tr>`).join("") + "</tbody></table>";
+  });
+}
+</script>
+</body>
+</html>

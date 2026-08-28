@@ -18,6 +18,13 @@ from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_exce
 
 app = Flask(__name__)
 
+# La pagina de costes del catalogo va en su propio modulo: tiene estado
+# (el recalculo en curso) y no tiene nada que ver con el buscador.
+# El import va aqui abajo y no arriba porque web_costes importa de este
+# modulo (construir_arbol, avisos_arbol) y arriba seria circular.
+from web_costes import bp as bp_costes  # noqa: E402
+app.register_blueprint(bp_costes)
+
 
 def _records(df):
     """Convierte el DataFrame a lista de dicts reemplazando NaN por None.

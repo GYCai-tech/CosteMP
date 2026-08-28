@@ -29,6 +29,11 @@ jobs:
           docker cp app.py costemp-ci:/app/app.py
           docker cp desglose.py costemp-ci:/app/desglose.py
           docker cp db.py costemp-ci:/app/db.py
+          # app.py importa web_costes al arrancar: sin estos dos el import falla
+          # y mueren TODOS los tests con un ModuleNotFoundError que no explica nada
+          docker cp db_pg.py costemp-ci:/app/db_pg.py
+          docker cp web_costes.py costemp-ci:/app/web_costes.py
+          docker cp exportar_costes.py costemp-ci:/app/exportar_costes.py
           docker cp templates/. costemp-ci:/app/templates/
           docker cp tests/. costemp-ci:/app/tests/
 
