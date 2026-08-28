@@ -11,6 +11,10 @@ services:
       # Dentro del contenedor la carpeta compartida se ve siempre en /datos,
       # da igual donde este montada fuera. Esto pisa lo que ponga el .env.
       - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
+      # Sin esto el contenedor va en UTC: las horas que escribe quedan 2 h por
+      # detras de las del ERP y de las del PC, y "Ultimo calculo" -que es un
+      # MAX() sobre esas fechas- llega a ir hacia atras.
+      - TZ=Europe/Madrid
     volumes:
       - ${COSTES_DATOS_DIR:-./salidas}:/datos
     restart: unless-stopped
@@ -29,6 +33,9 @@ services:
       - .env
     environment:
       - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
+      # Ademas de las fechas, la hora local es la que decide cuando salta la
+      # pasada diaria: en UTC saltaria a las 11:00 hora espanola.
+      - TZ=Europe/Madrid
     volumes:
       - ${COSTES_DATOS_DIR:-./salidas}:/datos
     # Cada 10 min mira si alguien toco el ERP y recalcula SOLO si cambio algo
