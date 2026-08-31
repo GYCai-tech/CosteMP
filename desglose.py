@@ -176,8 +176,18 @@ tiempo_mano_obra AS (
 -- que se tardo, no un tiempo teorico. El teorico seria el estandar de
 -- produccion, que es justo la otra via (mano de obra imputada).
 tiempo_op AS (
+    -- MEDIA PONDERADA por piezas: minutos totales / piezas totales, no la media
+    -- de los ratios de cada bono. La media simple da el mismo peso a un bono de
+    -- 1 pieza que a uno de 500, y como el bono corto casi todo lo que mide es la
+    -- preparacion de la maquina, dispara el tiempo. El 28200127 LATERAL JAULA
+    -- NUTRECO tiene dos bonos -115 min por 1 pieza y 275 min por 320- y salia a
+    -- 57,93 min/pieza (16,41 EUR) en vez de 1,22 (0,34 EUR): x48.
+    -- Medido sobre los 4.476 articulos con bonos, la media simple inflaba un
+    -- 15,9% de media y en 1.114 de ellos.
+    -- Ponderar por piezas equivale a dividir las dos sumas: las piezas se
+    -- cancelan en el numerador.
     SELECT obs.IdArticulo,
-           AVG(CAST(ob.TotalMinutos AS float) / NULLIF(ob.TotalPiezas, 0)) AS TiempoMin
+           SUM(CAST(ob.TotalMinutos AS float)) / NULLIF(SUM(ob.TotalPiezas), 0) AS TiempoMin
     FROM dbo.Ordenes_Bonos_Salidas obs
     INNER JOIN dbo.Ordenes_Articulos oa ON oa.IdArticulo = obs.IdArticulo AND oa.IdOrden = obs.IdOrden
     INNER JOIN dbo.Fases f ON f.IdFase = oa.IdFase AND f.Activa <> 0
@@ -476,7 +486,10 @@ WITH mano_obra AS (
     WHERE fs.IdArticulo = :codigo AND tmo.Duracion > 0
 ),
 bonos AS (
-    SELECT AVG(CAST(ob.TotalMinutos AS float) / NULLIF(ob.TotalPiezas, 0)) AS TiempoMin
+    -- media PONDERADA por piezas, igual que el CTE tiempo_op del despiece
+    -- (ver el comentario largo alli). Las dos tienen que calcular lo mismo o el
+    -- articulo valdria distinto buscandolo suelto que como componente.
+    SELECT SUM(CAST(ob.TotalMinutos AS float)) / NULLIF(SUM(ob.TotalPiezas), 0) AS TiempoMin
     FROM dbo.Ordenes_Bonos_Salidas obs
     INNER JOIN dbo.Ordenes_Articulos oa ON oa.IdArticulo = obs.IdArticulo AND oa.IdOrden = obs.IdOrden
     INNER JOIN dbo.Fases f ON f.IdFase = oa.IdFase AND f.Activa <> 0
