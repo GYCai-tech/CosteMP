@@ -213,6 +213,24 @@ tiempo_op AS (
 -- obra EN SILENCIO. Es intencionado: el aviso se sustituye por el repaso
 -- manual del ERP. Si aparece un 0 EUR de operacion sin explicacion, mirar
 -- aqui primero.
+-- OPERACION EXTERNA: la casilla "Externo" de la operacion en el ERP
+-- (Trabajos_Operacion.Externo). Es la declaracion EXPLICITA de que ese trabajo
+-- -lacar, zincar, curvar...- lo hace un tercero, con su proveedor al lado.
+--
+-- Es la unica senal fiable de trabajo externo, pero esta MUY poco rellenada: 51
+-- operaciones de 6.400 en toda la base (48 articulos con fase activa). El coste
+-- NO se decide con esto -sigue viniendo del precio propio: albaran, tarifa o
+-- linea de subcontrata-; esto solo marca la fila para que se vea de un vistazo
+-- que ese importe es de fuera. Ver 16301006/16301007 (lacado del soporte de
+-- bloque de sal) como caso bien montado: casilla + proveedor + subcontrata.
+externo AS (
+    SELECT DISTINCT fs.IdArticulo
+    FROM dbo.Trabajos_Operacion o
+    INNER JOIN dbo.Trabajos_Fases tf ON tf.IdTrabajo = o.IdTrabajo
+    INNER JOIN dbo.Fases f ON f.IdFase = tf.IdFase AND f.Activa <> 0
+    INNER JOIN dbo.Fases_Salidas fs ON fs.IdFase = tf.IdFase
+    WHERE o.Externo = 1
+),
 sin_operacion AS (
     SELECT DISTINCT fs.IdArticulo
     FROM dbo.Fases_Salidas fs
@@ -416,6 +434,8 @@ SELECT
     -- 1 = su fase no declara operacion ("Sin operacion"): no lleva mano de obra
     -- y por tanto no debe avisarse como "sin tiempo".
     CASE WHEN so.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS SinOperacion,
+    -- 1 = su operacion esta marcada como EXTERNA en el ERP (ver CTE 'externo')
+    CASE WHEN ex.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS EsExterno,
     m.Ruta AS Ruta                                 -- ruta jerarquica para el arbol
 FROM marcado m
 LEFT JOIN dbo.Articulos  art ON art.IdArticulo = m.IdArticulo
@@ -423,6 +443,7 @@ LEFT JOIN precio         p   ON p.IdArticulo   = m.IdArticulo
 LEFT JOIN tiempo_mano_obra tmo ON tmo.IdArticulo = m.IdArticulo
 LEFT JOIN tiempo_op      tp  ON tp.IdArticulo  = m.IdArticulo
 LEFT JOIN sin_operacion  so  ON so.IdArticulo  = m.IdArticulo
+LEFT JOIN externo        ex  ON ex.IdArticulo  = m.IdArticulo
 LEFT JOIN dbo.Articulos_Tipos_Aprovisionamiento t
        ON t.IdTipoAprovisionamiento = art.IdTipoAprovisionamiento
 ORDER BY m.Ruta
@@ -540,6 +561,26 @@ def sin_operacion(codigo: str) -> int:
     codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
     with get_engine().connect() as cn:
         r = cn.execute(SQL_SIN_OPERACION, {"codigo": codigo}).fetchone()
+    return int(r[0]) if r else 0
+
+
+SQL_ES_EXTERNO = text("""
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.Trabajos_Operacion o
+    INNER JOIN dbo.Trabajos_Fases tf ON tf.IdTrabajo = o.IdTrabajo
+    INNER JOIN dbo.Fases f ON f.IdFase = tf.IdFase AND f.Activa <> 0
+    INNER JOIN dbo.Fases_Salidas fs ON fs.IdFase = tf.IdFase
+    WHERE fs.IdArticulo = :codigo AND o.Externo = 1
+) THEN 1 ELSE 0 END
+""")
+
+
+def es_externo(codigo: str) -> int:
+    """1 si la operacion del articulo esta marcada como EXTERNA en el ERP.
+    Para el nodo raiz del arbol, que no sale como fila del CTE."""
+    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
+    with get_engine().connect() as cn:
+        r = cn.execute(SQL_ES_EXTERNO, {"codigo": codigo}).fetchone()
     return int(r[0]) if r else 0
 
 
@@ -701,7 +742,7 @@ def _s(v):
 
 
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
-                    servicio_raiz=None, medio_raiz=0):
+                    servicio_raiz=None, medio_raiz=0, externo_raiz=0):
     """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
     fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo.
 
@@ -713,6 +754,9 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             "precio": None, "fuente": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
             "tiempo": tiempo_raiz, "tiempo_medio": int(medio_raiz or 0),
+            # marcado a mano en el ERP (Trabajos_Operacion.Externo): solo etiqueta,
+            # no cambia ni el coste ni los avisos
+            "externo": int(externo_raiz or 0),
             "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -734,6 +778,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                 "sin_operacion": int(r.get("SinOperacion", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
                 "tiempo_medio": int(r.get("TiempoMedio", 0) or 0),
+                "externo": int(r.get("EsExterno", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -850,7 +895,7 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     operacion, coloreado por categoria), Comprados y Resumen (material+operacion+total)."""
     tiempo_raiz, medio_raiz = tiempo_operacion(codigo)
     arbol = construir_arbol(df, codigo, nombre, tiempo_raiz, sin_operacion(codigo),
-                            coste_propio(codigo), medio_raiz)
+                            coste_propio(codigo), medio_raiz, es_externo(codigo))
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
@@ -862,6 +907,8 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
         servicio = n.get("servicio")
         tipo_txt = ("de conjunto" if n.get("de_conjunto")
                     else "sin escandallo" if n.get("sin_escandallo")
+                    # la casilla "Externo" del ERP manda sobre la deduccion por precio
+                    else "trabajo externo" if n.get("externo")
                     else "trabajo sobre la pieza" if servicio is not None
                     else (n.get("tipo") or
                           ("" if hoja

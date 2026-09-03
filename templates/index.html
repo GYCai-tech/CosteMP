@@ -54,6 +54,8 @@
   .badge-s { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; }
   /* compra valorada pero sin tipo de aprovisionamiento en el ERP */
   .badge-t { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; }
+  /* operacion marcada como EXTERNA en el ERP (Trabajos_Operacion.Externo) */
+  .badge-x { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #ffedd5; color: #9a3412; }
   /* tiempo estimado con la media de bonos, no imputado en el ERP. Verde azulado
      para que no se confunda con los otros distintivos (morado, azul, ámbar). */
   .badge-teo { font-size: 10px; padding: 1px 5px; border-radius: 999px; background: #ccfbf1; color: #0f766e; }
@@ -248,6 +250,9 @@ function renderRow(r) {
   const arrow = r._kids ? '▸' : '•';
   const tipoCell = n.de_conjunto ? '<span class="badge-c">de conjunto</span>'
     : n.sin_escandallo ? '<span class="badge-s">sin escandallo</span>'
+    // la casilla "Externo" de la operación en el ERP manda sobre todo lo demás:
+    // es una declaración explícita de producción, no una deducción por el precio
+    : n.externo ? '<span class="badge-x">trabajo externo</span>'
     // el artículo buscado puede llevar un trabajo propio (lacado, zincado,
     // remachado...) que se suma al coste de sus materiales
     : n.servicio != null ? '<span class="badge-t">trabajo sobre la pieza</span>'

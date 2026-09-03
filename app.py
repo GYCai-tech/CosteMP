@@ -12,7 +12,8 @@ import openpyxl
 import pandas as pd
 from flask import Flask, request, jsonify, send_file, render_template
 
-from desglose import (buscar_articulos, desglose, nombre_articulo, exportar_excel,
+from desglose import (buscar_articulos, desglose, es_externo, nombre_articulo,
+                      exportar_excel,
                       tiempo_operacion, escandallo_directo, sin_operacion,
                       coste_propio)
 
@@ -50,7 +51,7 @@ RATE_OP = 17.0 / 60.0   # 17 €/h operario -> €/min
 
 
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
-                    servicio_raiz=None, medio_raiz=0):
+                    servicio_raiz=None, medio_raiz=0, externo_raiz=0):
     """Árbol del escandallo con coste de MATERIAL (hojas compradas) y de OPERACIÓN
     (nodos fabricados = tiempo × 17 €/h), y el rollup material+operación por nodo.
 
@@ -62,6 +63,9 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             "precio": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
             "tiempo": tiempo_raiz, "tiempo_medio": int(medio_raiz or 0),
+            # marcado a mano en el ERP (Trabajos_Operacion.Externo): solo etiqueta,
+            # no cambia ni el coste ni los avisos
+            "externo": int(externo_raiz or 0),
             "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -83,6 +87,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                 "sin_operacion": int(r.get("SinOperacion", 0) or 0),
                 "tiempo": _num(r.get("TiempoOp")),
                 "tiempo_medio": int(r.get("TiempoMedio", 0) or 0),
+                "externo": int(r.get("EsExterno", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -174,7 +179,8 @@ def api_desglose():
     df = desglose(codigo)
     tiempo_raiz, medio_raiz = tiempo_operacion(codigo)
     arbol = (construir_arbol(df, codigo, nombre_articulo(codigo), tiempo_raiz,
-                             sin_operacion(codigo), coste_propio(codigo), medio_raiz)
+                             sin_operacion(codigo), coste_propio(codigo), medio_raiz,
+                             es_externo(codigo))
              if not df.empty else None)
     return jsonify({
         "codigo": codigo,
