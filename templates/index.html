@@ -256,9 +256,13 @@ function renderRow(r) {
     // el artículo buscado puede llevar un trabajo propio (lacado, zincado,
     // remachado...) que se suma al coste de sus materiales
     : n.servicio != null ? '<span class="badge-t">trabajo sobre la pieza</span>'
-    : !hoja ? '<span style="color:#888;font-size:12px">fabricado</span>'
+    // "fabricado" SOLO si su fase declara operación (casilla OrdenTrabajo del
+    // ERP). Si no la tiene no se pone nada en su lugar: que no haya operación
+    // NO significa que se compre -- de los 299 artículos sin la casilla, 285 no
+    // tienen ni un albarán (ver la nota de con_orden en desglose.py).
+    : (!hoja && n.con_orden) ? '<span style="color:#888;font-size:12px">fabricado</span>'
     // compra valorada por albarán a la que le falta el tipo en el ERP
-    : !n.tipo && n.precio != null ? '<span class="badge-t">compra sin tipo</span>'
+    : hoja && !n.tipo && n.precio != null ? '<span class="badge-t">compra sin tipo</span>'
     : esc(n.tipo || '');
   // celda de tiempo: min de operación (ramas); aviso si es fabricado sin tiempo.
   // Si el tiempo NO viene de la mano de obra imputada en el ERP sino de la media

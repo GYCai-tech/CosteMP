@@ -231,6 +231,23 @@ externo AS (
     INNER JOIN dbo.Fases_Salidas fs ON fs.IdFase = tf.IdFase
     WHERE o.Externo = 1
 ),
+-- ORDEN DE TRABAJO: la casilla OrdenTrabajo del trabajo de la fase. Marcada
+-- significa que esa operacion se lanza y lleva mano de obra; es lo que separa
+-- una fase que FABRICA de una que solo existe para llevar materiales.
+-- 5.630 trabajos de 5.929 la llevan marcada (95%).
+--
+-- Solo se usa para ETIQUETAR la fila como "fabricado". NO sirve para decir que
+-- lo demas se compra: de los 299 articulos sin la casilla, 285 no tienen ni un
+-- albaran. Ahi la casilla esta desmarcada porque la fase no tiene operacion
+-- (260 se llaman "Sin Operacion") o porque se les olvido marcarla (17 Lacar,
+-- y algun Cortar, Punzonar, Inyectar, Montar...). Ver la nota de sin_operacion.
+con_orden AS (
+    SELECT DISTINCT fs.IdArticulo
+    FROM dbo.Fases_Salidas fs
+    INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
+    WHERE EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                  WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
+),
 sin_operacion AS (
     SELECT DISTINCT fs.IdArticulo
     FROM dbo.Fases_Salidas fs
@@ -436,6 +453,9 @@ SELECT
     CASE WHEN so.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS SinOperacion,
     -- 1 = su operacion esta marcada como EXTERNA en el ERP (ver CTE 'externo')
     CASE WHEN ex.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS EsExterno,
+    -- 1 = su fase activa declara una operacion (casilla OrdenTrabajo marcada).
+    -- Es lo unico con lo que se etiqueta una fila como "fabricado".
+    CASE WHEN co.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS ConOrden,
     m.Ruta AS Ruta                                 -- ruta jerarquica para el arbol
 FROM marcado m
 LEFT JOIN dbo.Articulos  art ON art.IdArticulo = m.IdArticulo
@@ -444,6 +464,7 @@ LEFT JOIN tiempo_mano_obra tmo ON tmo.IdArticulo = m.IdArticulo
 LEFT JOIN tiempo_op      tp  ON tp.IdArticulo  = m.IdArticulo
 LEFT JOIN sin_operacion  so  ON so.IdArticulo  = m.IdArticulo
 LEFT JOIN externo        ex  ON ex.IdArticulo  = m.IdArticulo
+LEFT JOIN con_orden      co  ON co.IdArticulo  = m.IdArticulo
 LEFT JOIN dbo.Articulos_Tipos_Aprovisionamiento t
        ON t.IdTipoAprovisionamiento = art.IdTipoAprovisionamiento
 ORDER BY m.Ruta
@@ -561,6 +582,26 @@ def sin_operacion(codigo: str) -> int:
     codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
     with get_engine().connect() as cn:
         r = cn.execute(SQL_SIN_OPERACION, {"codigo": codigo}).fetchone()
+    return int(r[0]) if r else 0
+
+
+SQL_CON_ORDEN = text("""
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.Fases_Salidas fs
+    INNER JOIN dbo.Fases f ON f.IdFase = fs.IdFase AND f.Activa <> 0
+    WHERE fs.IdArticulo = :codigo
+      AND EXISTS (SELECT 1 FROM dbo.Trabajos_Fases tf
+                  WHERE tf.IdFase = fs.IdFase AND tf.OrdenTrabajo = 1)
+) THEN 1 ELSE 0 END
+""")
+
+
+def con_orden(codigo: str) -> int:
+    """1 si la fase activa del articulo declara una operacion (casilla
+    OrdenTrabajo). Para el nodo raiz, que no sale como fila del CTE."""
+    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
+    with get_engine().connect() as cn:
+        r = cn.execute(SQL_CON_ORDEN, {"codigo": codigo}).fetchone()
     return int(r[0]) if r else 0
 
 
@@ -742,7 +783,8 @@ def _s(v):
 
 
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
-                    servicio_raiz=None, medio_raiz=0, externo_raiz=0):
+                    servicio_raiz=None, medio_raiz=0, externo_raiz=0,
+                    con_orden_raiz=0):
     """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
     fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo.
 
@@ -757,6 +799,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             # marcado a mano en el ERP (Trabajos_Operacion.Externo): solo etiqueta,
             # no cambia ni el coste ni los avisos
             "externo": int(externo_raiz or 0),
+            "con_orden": int(con_orden_raiz or 0),
             "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -779,6 +822,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                 "tiempo": _num(r.get("TiempoOp")),
                 "tiempo_medio": int(r.get("TiempoMedio", 0) or 0),
                 "externo": int(r.get("EsExterno", 0) or 0),
+                "con_orden": int(r.get("ConOrden", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -895,7 +939,8 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     operacion, coloreado por categoria), Comprados y Resumen (material+operacion+total)."""
     tiempo_raiz, medio_raiz = tiempo_operacion(codigo)
     arbol = construir_arbol(df, codigo, nombre, tiempo_raiz, sin_operacion(codigo),
-                            coste_propio(codigo), medio_raiz, es_externo(codigo))
+                            coste_propio(codigo), medio_raiz, es_externo(codigo),
+                            con_orden(codigo))
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
@@ -910,10 +955,11 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
                     # la casilla "Externo" del ERP manda sobre la deduccion por precio
                     else "trabajo externo" if n.get("externo")
                     else "trabajo sobre la pieza" if servicio is not None
-                    else (n.get("tipo") or
-                          ("" if hoja
-                           else "fabricado sin operación" if n.get("sin_operacion")
-                           else "fabricado")))
+                    # "fabricado" SOLO si su fase declara operacion (casilla
+                    # OrdenTrabajo). Sin ella no se pone nada en su lugar: no se
+                    # puede deducir que se compre (ver la nota de con_orden).
+                    else ("fabricado" if not hoja and n.get("con_orden")
+                          else (n.get("tipo") or "")))
         reg.append({
             "Nivel": depth,
             "Componente": ("    " * depth) + (n.get("nombre") or ""),
