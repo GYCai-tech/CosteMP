@@ -162,10 +162,17 @@ async function cargar(codigo, desc) {
     for (const n of nodes) {
       const id = idc++;
       const kids = n.hijos && n.hijos.length;
+      // el articulo buscado: se pinta SIEMPRE como primera fila (ver abajo),
+      // pero no cuenta como hueco -- sus avisos son los de sus piezas. Mismo
+      // criterio que avisos_arbol() en app.py, que arranca en arbol.hijos.
+      const esRaizConPiezas = depth === 0 && kids;
       rows.push(byId[id] = { _id: id, _parent: parent, _depth: depth, _kids: !!kids, n });
       if (kids) {                                                      // rama = pieza fabricada
-        collapsed.add(id); flat(n.hijos, depth + 1, id);
-        if (n.sin_tiempo) bump(sinTiempo, n, id);                      // fabricada sin tiempo de bono
+        // la raiz nace ABIERTA: si se plegara, la tabla entera quedaria
+        // escondida detras de una sola fila.
+        if (depth > 0) collapsed.add(id);
+        flat(n.hijos, depth + 1, id);
+        if (n.sin_tiempo && !esRaizConPiezas) bump(sinTiempo, n, id);  // fabricada sin tiempo de bono
       }
       // las piezas "de conjunto" no se avisan: su coste SI llega, por la via del
       // conjunto, que entra entero una sola vez (ver 11401042, donde el CONJUNTO
@@ -179,16 +186,13 @@ async function cargar(codigo, desc) {
       // Tampoco se mira el importe: un coste de fraccion de centimo es legitimo.
       else if (n.precio == null) bump(holes, n, id);
     }
-  // la raiz normalmente se omite (su nombre ya esta en el titulo) y se
-  // empieza a listar por sus hijos. Pero si la raiz misma lleva operacion
-  // propia (empaquetado/retractilado del producto ya montado, sin pasar por
-  // una fase intermedia — p.ej. los NIDO MADERA o el BEBEDERO AUTOMATICO
-  // COLGANTE) o un trabajo externo propio (lacado, zincado... via
-  // SQL_SERVICIO_EXTERNO, campo "servicio"), ese coste no aparecia en
-  // ninguna fila visible aunque si sumaba en la cabecera y en el TOTAL: se
-  // ensena la raiz como fila para que el importe tenga de donde salir.
-  })(data.arbol.hijos.length && !data.arbol.coste_op && data.arbol.servicio == null
-     ? data.arbol.hijos : [data.arbol], 0, null);
+  // La tabla arranca SIEMPRE en el articulo buscado, aunque su nombre ya este
+  // en el titulo: es la fila que enseña SU operacion (empaquetado, retractilado,
+  // lacado por subcontrata...) y su coste acumulado, y da un padre visible a
+  // todo lo que cuelga. Antes se omitia salvo que llevase coste_op o servicio
+  // propio (commits 47ca5bf y 851ac0d), asi que en los articulos sin operacion
+  // propia el arbol empezaba en el aire y no habia donde leer el 0 de operacion.
+  })([data.arbol], 0, null);
 
   tbody.innerHTML = rows.map(renderRow).join('')
     + `<tr class="totrow">
