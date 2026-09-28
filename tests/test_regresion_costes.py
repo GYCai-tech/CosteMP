@@ -24,7 +24,7 @@ O dentro del contenedor en marcha:
 import pytest
 
 from app import resumen_lote
-from desglose import coste_propio, desglose
+from desglose import coste_propio, desglose, tiempo_operacion
 
 
 def test_no_duplica_precio_propio_si_esta_en_no_suma_propia():
@@ -147,3 +147,35 @@ def test_material_mas_operacion_es_igual_al_total(codigo):
     assert fila["CosteMaterial"] + fila["CosteOperacion"] == pytest.approx(
         fila["CosteTotal"], abs=0.001
     )
+
+
+def test_manda_la_media_de_bonos_sobre_el_tiempo_teorico():
+    """Prioridad del tiempo (cambiada el 28/09/2026): primero la media REAL de
+    los bonos y solo si no la hay el tiempo teorico de la mano de obra
+    imputada. 10803002 PAQUETE JAULA AURIA-2 tiene las dos: 345 min de
+    teorico frente a ~8,5 min de media. Si vuelve a mandar el teorico, el
+    tiempo se dispara y la marca de "medio" desaparece.
+
+    Se comprueban las dos vias: la del articulo raiz (SQL_TIEMPO) y la del
+    articulo como componente del despiece (TiempoOp). Tienen que dar lo
+    mismo o una pieza valdria distinto buscada sola que dentro de otra."""
+    minutos, es_medio = tiempo_operacion("10803002")
+    assert es_medio == 1
+    assert minutos < 100, f"{minutos} min: parece que manda el teorico (345)"
+
+    # 60102085 DIVISION JAULA AURIA (soldada): teorico 1,63 min, media ~0,55
+    minutos, es_medio = tiempo_operacion("60102085")
+    df = desglose("10803002")
+    fila = df[df["IdArticulo"] == "60102085"].iloc[0]
+    assert es_medio == 1 and int(fila["TiempoMedio"]) == 1
+    assert float(fila["TiempoOp"]) == pytest.approx(minutos, rel=1e-6)
+
+
+def test_media_de_bonos_a_cero_cede_ante_el_teorico():
+    """12501301 PAQUETE 1 BEBEDERO AVES CANAL tiene bonos con 0 minutos
+    apuntados y un teorico de ~5,27 min. Una media de 0 no es una medicion
+    (mismo criterio que Duracion = 0), asi que debe usarse el teorico y no
+    dejar la mano de obra a 0 EUR."""
+    minutos, es_medio = tiempo_operacion("12501301")
+    assert es_medio == 0
+    assert minutos > 1

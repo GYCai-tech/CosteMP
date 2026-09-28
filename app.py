@@ -59,8 +59,8 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
 
     servicio_raiz: coste del trabajo externo del propio artículo buscado, que se
     suma a sus materiales (ver SQL_SERVICIO_EXTERNO en desglose.py).
-    medio_raiz: 1 si el tiempo de la raíz sale de la media de bonos en vez de
-    la mano de obra imputada en el ERP."""
+    medio_raiz: 1 si el tiempo de la raíz sale de la media de bonos (fuente
+    preferente); 0 si sale del tiempo teórico de la mano de obra imputada."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
@@ -106,8 +106,13 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None and not n.get("tiempo_medio"):
-            # mano de obra IMPUTADA en el ERP: es una declaración explícita de que
-            # la pieza lleva trabajo, así que manda incluso sobre la casilla.
+            # tiempo TEÓRICO (mano de obra imputada en el ERP). Solo llega aquí
+            # si no hay media de bonos utilizable: la media manda (ver TiempoOp
+            # en desglose.py). Es una declaración explícita de que la pieza
+            # lleva trabajo, así que manda incluso sobre la casilla. Caso
+            # límite: una pieza "sin operación" CON media y CON teórico se queda
+            # a 0 €, porque la casilla anula la media y el teórico no llega a
+            # verse. Comprobado el 28/09/2026: no hay ninguna.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
@@ -125,9 +130,9 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None:
             # media de los bonos, para las piezas que sí declaran operación.
-            # Se usa igual, marcada como "medio" en la tabla: es la media REAL
-            # de lo que se tardó, no un tiempo teórico. El teórico sería el
-            # estándar de producción, que es la rama de arriba.
+            # Es la FUENTE PREFERENTE: la media REAL de lo que se tardó, con el
+            # montaje dentro, marcada como "medio" en la tabla. El teórico
+            # (rama de arriba) solo se usa cuando no hay media.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
