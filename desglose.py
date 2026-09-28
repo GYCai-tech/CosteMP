@@ -143,9 +143,9 @@ precio AS (
     ) s
     WHERE s.rn = 1
 ),
--- MANO DE OBRA IMPUTADA A MANO (Trabajos_ManoObra). Es la fuente PREFERENTE de
--- tiempo: produccion la rellena operacion a operacion en el ERP, asi que cuando
--- existe manda sobre la media de bonos.
+-- MANO DE OBRA IMPUTADA A MANO (Trabajos_ManoObra): el tiempo TEORICO, que
+-- produccion rellena operacion a operacion en el ERP. Es el RESPALDO: solo se
+-- usa si el articulo no tiene media de bonos (ver tiempo_op y TiempoOp).
 --   - Duracion viene en DIAS (IdUnidadDuracion = 'D'), de ahi el x1440 para
 --     pasarla a minutos. Comprobado contra CosteTotal: 0,001389 D x 24 h x 17
 --     EUR/h = 0,5667 EUR, que es exactamente lo que guarda la fila.
@@ -170,11 +170,15 @@ tiempo_mano_obra AS (
     INNER JOIN dbo.Fases_Salidas fs ON fs.IdFase = m.IdFase
     GROUP BY fs.IdArticulo
 ),
--- RESPALDO: media de los bonos de produccion (TotalMinutos/TotalPiezas) con fase
--- activa. Se usa solo si el articulo no tiene mano de obra imputada, y entonces
--- la linea sale marcada como "medio" en pantalla: es la media REAL de lo
--- que se tardo, no un tiempo teorico. El teorico seria el estandar de
--- produccion, que es justo la otra via (mano de obra imputada).
+-- FUENTE PREFERENTE: media de los bonos de produccion (TotalMinutos/TotalPiezas)
+-- con fase activa. Es la media REAL de lo que se tardo, y manda sobre el tiempo
+-- teorico (mano de obra imputada, ver tiempo_mano_obra). La linea sale marcada
+-- como "medio" en pantalla.
+--   - TotalMinutos INCLUYE EL MONTAJE de la maquina: el ERP lo guarda tambien
+--     aparte en Ordenes_Bonos.TiempoMontaje, pero no lo resta. Lo confirman sus
+--     propias medias: MediaBonoCon = piezas*60/TotalMinutos y MediaBonoSin =
+--     piezas*60/(TotalMinutos-TiempoMontaje). Asi que el montaje queda
+--     repartido entre las piezas fabricadas.
 tiempo_op AS (
     -- MEDIA PONDERADA por piezas: minutos totales / piezas totales, no la media
     -- de los ratios de cada bono. La media simple da el mismo peso a un bono de
@@ -443,11 +447,19 @@ SELECT
               AND EXISTS (SELECT 1 FROM dbo.Fases_Salidas fss WHERE fss.IdArticulo = m.IdArticulo)
               AND EXISTS (SELECT 1 FROM dbo.Articulos_Conjuntos ac WHERE ac.IdArticulo = m.IdArticulo)
          THEN 1 ELSE 0 END AS DeConjunto,
-    -- min/pieza de operacion. Manda la mano de obra imputada; si no la hay, la
-    -- media de bonos, y entonces TiempoMedio avisa de que es una estimacion.
-    COALESCE(tmo.TiempoMin, tp.TiempoMin) AS TiempoOp,
-    CASE WHEN tmo.TiempoMin IS NULL AND tp.TiempoMin IS NOT NULL
-         THEN 1 ELSE 0 END AS TiempoMedio,
+    -- min/pieza de operacion. Manda la media REAL de los bonos; si no la hay,
+    -- el tiempo teorico (mano de obra imputada). TiempoMedio = 1 cuando el
+    -- tiempo sale de los bonos, que es lo que se etiqueta como "medio".
+    -- Una media de 0 minutos (bonos sin minutos apuntados) NO es una medicion
+    -- -mismo criterio que Duracion = 0 en la mano de obra-, asi que cede ante
+    -- el teorico. Sin teorico, se queda en 0 como hasta ahora.
+    -- MISMA REGLA QUE SQL_TIEMPO (articulo raiz): si cambia una, la otra.
+    CASE WHEN tp.TiempoMin > 0          THEN tp.TiempoMin
+         WHEN tmo.TiempoMin IS NOT NULL THEN tmo.TiempoMin
+         ELSE tp.TiempoMin END AS TiempoOp,
+    CASE WHEN tp.TiempoMin > 0 THEN 1
+         WHEN tmo.TiempoMin IS NULL AND tp.TiempoMin IS NOT NULL THEN 1
+         ELSE 0 END AS TiempoMedio,
     -- 1 = su fase no declara operacion ("Sin operacion"): no lleva mano de obra
     -- y por tanto no debe avisarse como "sin tiempo".
     CASE WHEN so.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS SinOperacion,
@@ -515,9 +527,10 @@ def nombre_articulo(codigo: str) -> str:
     return r[0] if r and r[0] else ""
 
 
-# Tiempo del articulo RAIZ, con la misma prioridad que los CTE de arriba:
-# manda la mano de obra imputada (Trabajos_ManoObra) y la media de bonos es el
-# respaldo. Ver el comentario de tiempo_mano_obra para el porque del x1440.
+# Tiempo del articulo RAIZ, con la misma prioridad que TiempoOp en el despiece:
+# manda la media REAL de los bonos y el tiempo teorico (mano de obra imputada,
+# Trabajos_ManoObra) es el respaldo. Ver el comentario de tiempo_mano_obra para
+# el porque del x1440 y el de tiempo_op para el montaje.
 SQL_TIEMPO = text("""
 WITH mano_obra AS (
     SELECT SUM(tmo.Duracion) * 1440.0 AS TiempoMin
@@ -540,9 +553,12 @@ bonos AS (
 )
 -- las dos son agregados sin GROUP BY, asi que cada una devuelve exactamente una
 -- fila (con NULL si no hay datos) y el CROSS JOIN da una sola fila
-SELECT COALESCE(mo.TiempoMin, b.TiempoMin) AS TiempoMin,
-       CASE WHEN mo.TiempoMin IS NULL AND b.TiempoMin IS NOT NULL
-            THEN 1 ELSE 0 END AS EsMedio
+SELECT CASE WHEN b.TiempoMin > 0          THEN b.TiempoMin
+            WHEN mo.TiempoMin IS NOT NULL THEN mo.TiempoMin
+            ELSE b.TiempoMin END AS TiempoMin,
+       CASE WHEN b.TiempoMin > 0 THEN 1
+            WHEN mo.TiempoMin IS NULL AND b.TiempoMin IS NOT NULL THEN 1
+            ELSE 0 END AS EsMedio
 FROM mano_obra mo CROSS JOIN bonos b
 """)
 
@@ -551,8 +567,9 @@ def tiempo_operacion(codigo: str):
     """Tiempo de operacion (min/pieza) del articulo raiz y si es una estimacion.
 
     Devuelve (minutos, es_medio): minutos es None si no hay ningun dato, y
-    es_medio vale 1 cuando el tiempo sale de la media de bonos porque el
-    articulo no tiene mano de obra imputada en el ERP."""
+    es_medio vale 1 cuando el tiempo sale de la media de bonos, que es la
+    fuente preferente; vale 0 cuando sale del tiempo teorico (mano de obra
+    imputada en el ERP) porque no hay media utilizable."""
     codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
     with get_engine().connect() as cn:
         r = cn.execute(SQL_TIEMPO, {"codigo": codigo}).fetchone()
@@ -790,8 +807,8 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
 
     servicio_raiz: coste del trabajo externo del propio articulo buscado, que
     se suma a sus materiales (ver SQL_SERVICIO_EXTERNO).
-    medio_raiz: 1 si el tiempo de la raiz sale de la media de bonos en vez de
-    la mano de obra imputada en el ERP."""
+    medio_raiz: 1 si el tiempo de la raiz sale de la media de bonos (fuente
+    preferente); 0 si sale del tiempo teorico de la mano de obra imputada."""
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "fuente": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
@@ -836,8 +853,13 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None and not n.get("tiempo_medio"):
-            # mano de obra IMPUTADA en el ERP: declaracion explicita de que la
-            # pieza lleva trabajo, manda incluso sobre la casilla de operacion.
+            # tiempo TEORICO (mano de obra imputada en el ERP). Solo llega aqui
+            # si no hay media de bonos utilizable: la media manda (ver TiempoOp).
+            # Es una declaracion explicita de que la pieza lleva trabajo, asi
+            # que manda incluso sobre la casilla de operacion. Caso limite: una
+            # pieza "sin operacion" CON media y CON teorico se queda a 0 EUR,
+            # porque la casilla anula la media y el teorico no llega a verse.
+            # Comprobado el 28/09/2026: no hay ninguna.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
@@ -849,7 +871,8 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None:
-            # media de los bonos de una pieza que si declara operacion
+            # media de los bonos (fuente preferente) de una pieza que si
+            # declara operacion. Lleva el montaje dentro.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
             n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]

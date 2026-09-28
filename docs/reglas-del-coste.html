@@ -222,18 +222,22 @@ AND NOT EXISTS (ninguna fila en Fases_Salidas)</pre>
   <h2><span class="n">05</span>De dónde sale el tiempo</h2>
   <p>Solo se pide tiempo a los nodos <b>fabricados</b> — los que tienen componentes. A una
      compra nunca se le reprocha no tener minutos. Seis ramas, en orden.</p>
+  <p><b>Manda la media real de los bonos.</b> El tiempo teórico de la mano de obra imputada
+     solo se usa cuando el artículo no tiene media. Por eso la rama 2 solo se alcanza sin
+     media de bonos. El orden se invirtió el 28/09/2026: hasta entonces mandaba el teórico.</p>
 
   <div class="paso">
     <p class="cab"><span class="num ok">1</span>Es hoja → 0 € correcto</p>
     <p>Una compra. Sin coste de operación y sin aviso.</p>
   </div>
   <div class="paso">
-    <p class="cab"><span class="num">2</span>Mano de obra imputada en la fase → tiempo real</p>
+    <p class="cab"><span class="num">2</span>Sin media de bonos, mano de obra imputada → tiempo teórico</p>
     <p>De <code>Trabajos_ManoObra</code>. La <code>Duracion</code> viene en <b>días</b>, de ahí
        el ×1440 para pasarla a minutos. Se suman las líneas de una misma fase y se agrupa por
        artículo. <code>Duracion = 0</code> no es una medición, es la casilla sin rellenar, y
        no cuenta.</p>
-    <p>Es una declaración explícita de que la pieza lleva trabajo, así que <b>manda incluso
+    <p>Solo se usa si el artículo no tiene media de bonos, o si su media sale a 0 minutos.
+       Es una declaración explícita de que la pieza lleva trabajo, así que <b>manda incluso
        sobre la casilla</b> de orden de trabajo.</p>
   </div>
   <div class="paso">
@@ -247,10 +251,15 @@ AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
   </div>
   <div class="paso">
     <p class="cab"><span class="num">4</span>Media de los bonos de producción → tiempo medio</p>
-    <p><code>AVG(TotalMinutos / TotalPiezas)</code> sobre los bonos con fase activa y
-       <code>TotalPiezas &gt; 0</code>. Se marca en pantalla como <span class="etq e5">medio</span>.</p>
-    <p>Es la media <b>real</b> de lo que se tardó, no un tiempo teórico — el teórico sería el
-       estándar de producción, que es la rama 2. La etiqueta estuvo invertida hasta el 27/08.</p>
+    <p><code>SUM(TotalMinutos) / SUM(TotalPiezas)</code> sobre los bonos con fase activa y
+       <code>TotalPiezas &gt; 0</code>, es decir, la media ponderada por piezas. Se marca en
+       pantalla como <span class="etq e5">medio</span>.</p>
+    <p>Es la media <b>real</b> de lo que se tardó y la <b>fuente preferente</b>: manda sobre el
+       tiempo teórico de la rama 2. Una media de 0 minutos no es una medición y cede ante el
+       teórico si lo hay.</p>
+    <p><b>Lleva el montaje dentro.</b> <code>TotalMinutos</code> incluye el
+       <code>TiempoMontaje</code> del bono, que el ERP guarda aparte pero no resta. El montaje
+       queda repartido entre las piezas fabricadas, así que pesa más en las tiradas cortas.</p>
   </div>
   <div class="paso">
     <p class="cab"><span class="num ok">5</span>Trabajo externo → 0 € correcto</p>
@@ -337,7 +346,7 @@ AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
     <tr><td><b>trabajo sobre la pieza</b></td><td>Se compra un trabajo —lacado, zincado— que se suma a sus materiales.</td></tr>
     <tr><td><b>compra sin tipo</b></td><td>Se ha valorado por albarán aunque falte el tipo en la ficha.</td></tr>
     <tr><td><b>fabricado</b></td><td>Es una rama: su coste sube de los hijos.</td></tr>
-    <tr><td><b>medio</b></td><td>El tiempo es la media de los bonos, no mano de obra imputada.</td></tr>
+    <tr><td><b>medio</b></td><td>El tiempo es la media real de los bonos, la fuente preferente. Sin esta etiqueta, el tiempo es el teórico de la mano de obra imputada.</td></tr>
   </table>
 </section>
 
