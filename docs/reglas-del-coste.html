@@ -346,7 +346,8 @@ AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
     <tr><td><b>trabajo sobre la pieza</b></td><td>Se compra un trabajo —lacado, zincado— que se suma a sus materiales.</td></tr>
     <tr><td><b>compra sin tipo</b></td><td>Se ha valorado por albarán aunque falte el tipo en la ficha.</td></tr>
     <tr><td><b>fabricado</b></td><td>Es una rama: su coste sube de los hijos.</td></tr>
-    <tr><td><b>medio</b></td><td>El tiempo es la media real de los bonos, la fuente preferente. Sin esta etiqueta, el tiempo es el teórico de la mano de obra imputada.</td></tr>
+    <tr><td><b>medio</b></td><td>El tiempo es la media real de los bonos, con el montaje dentro. Es la fuente preferente.</td></tr>
+    <tr><td><b>teórico</b></td><td>El tiempo es la mano de obra imputada en el ERP. Solo se usa cuando la pieza no tiene media de bonos.</td></tr>
   </table>
 </section>
 

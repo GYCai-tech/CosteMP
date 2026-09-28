@@ -999,12 +999,13 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
             # el tiempo que de verdad se cobra: None si la casilla del ERP dice
             # "sin operacion", aunque el articulo tenga partes fichados
             "Tiempo min": (None if hoja else n.get("tiempo_efectivo")),
-            # De donde sale el tiempo. "medio (bonos)" es la MEDIA REAL de lo que
-            # se tardo, no un tiempo teorico: el teorico seria el estandar que fija
-            # produccion, y ese es justamente el otro caso ("mano de obra").
+            # De donde sale el tiempo, SIEMPRE que haya uno. "medio (bonos)" es la
+            # MEDIA REAL de lo que se tardo (con el montaje dentro) y es la fuente
+            # preferente; "teorico (mano de obra)" es el estandar que imputa
+            # produccion en el ERP, y solo se usa si no hay media.
             "Origen tiempo": (None if (hoja or n.get("tiempo_efectivo") is None)
                               else "medio (bonos)" if n.get("tiempo_medio")
-                              else "mano de obra"),
+                              else "teórico (mano de obra)"),
             # minutos acumulados: los de esta linea mas los de todo lo que cuelga
             "Tiempo total min": n.get("tiempo_op_total") or None,
             "Coste operación €": (None if hoja else n.get("coste_op")),
