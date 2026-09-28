@@ -59,6 +59,8 @@
   /* tiempo estimado con la media de bonos, no imputado en el ERP. Verde azulado
      para que no se confunda con los otros distintivos (morado, azul, ámbar). */
   .badge-teo { font-size: 10px; padding: 1px 5px; border-radius: 999px; background: #ccfbf1; color: #0f766e; }
+  /* tiempo teórico (mano de obra imputada): solo cuando no hay media de bonos */
+  .badge-mo { font-size: 10px; padding: 1px 5px; border-radius: 999px; background: #e0e7ff; color: #3730a3; }
   .arrow { display: inline-block; width: 12px; color: #999; font-size: 11px; }
   .arrow.leaf { color: transparent; }
 
@@ -265,15 +267,18 @@ function renderRow(r) {
     : hoja && !n.tipo && n.precio != null ? '<span class="badge-t">compra sin tipo</span>'
     : esc(n.tipo || '');
   // celda de tiempo: min de operación (ramas); aviso si es fabricado sin tiempo.
-  // Si el tiempo NO viene de la mano de obra imputada en el ERP sino de la media
-  // de bonos, se marca "medio" (a propósito NO va al panel de avisos: es un
-  // tiempo utilizable, solo menos fiable).
+  // Cada tiempo lleva SIEMPRE la etiqueta de dónde sale:
+  //   "medio"   -> media real de los bonos, la fuente preferente (montaje dentro)
+  //   "teórico" -> mano de obra imputada en el ERP, solo si no hay media
+  // Ninguna de las dos va al panel de avisos: las dos son tiempos utilizables.
   // tiempo_efectivo es el que de verdad se cobra: viene vacío si la casilla del
   // ERP dice "sin operación", aunque la pieza tenga partes fichados
   const tiempoCell = hoja ? '' : (n.sin_tiempo
       ? '<span style="color:#2563eb;font-size:11px">sin tiempo</span>'
       : n.tiempo_efectivo != null
-        ? t2(n.tiempo_efectivo) + (n.tiempo_medio ? ' <span class="badge-teo">medio</span>' : '')
+        ? t2(n.tiempo_efectivo) + (n.tiempo_medio
+            ? ' <span class="badge-teo" title="Media real de los bonos de producción, con el montaje dentro">medio</span>'
+            : ' <span class="badge-mo" title="Tiempo teórico: mano de obra imputada en el ERP. Se usa porque no hay media de bonos">teórico</span>')
       // fase declarada "Sin operación": no lleva mano de obra, no es un hueco
       : n.sin_operacion ? '<span style="color:#94a3b8;font-size:11px">sin operación</span>'
       : '');
