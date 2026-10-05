@@ -71,12 +71,16 @@ Quedan dos contenedores:
 | | |
 |---|---|
 | `costemp` | la aplicacion web, puerto 5010 |
-| `costemp-vigilante` | recalcula: cada 10 min si hubo cambios, y entero a las 9:00 |
+| `costemp-vigilante` | recalcula el catalogo entero cada 3 dias a las 05:00; entre medias no toca el ERP |
+
+El libro de Excel, `/catalogo` y `/costes` leen solo de Postgres: entre pasada
+y pasada sirven el coste de la ultima. Para tenerlo al momento, consultar el
+articulo en el buscador o pulsar "Recalcular" en `/costes`.
 
 ## Comprobar que funciona
 
 ```bash
-docker logs -f costemp-vigilante          # deberia decir "sin cambios" o recalcular
+docker logs -f costemp-vigilante          # "Pasada completa cada 3 dias..." y, cuando toque, la pasada
 ls -l /mnt/costes/datos_costes.xlsx       # se regenera en cada recalculo
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:5010/catalogo
 ```
@@ -85,6 +89,7 @@ Y en Postgres, la traza de ejecuciones:
 
 ```sql
 SELECT * FROM core.log_coste_recalculo ORDER BY id DESC LIMIT 5;
+SELECT ultima_completa FROM core.cfg_coste_vigilancia;   -- la ultima pasada programada
 ```
 
 ## Despues del despliegue

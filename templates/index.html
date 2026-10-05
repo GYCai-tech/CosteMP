@@ -25,6 +25,7 @@
   button { padding: 7px 14px; border: 0; border-radius: 6px;
            background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
   button.ghost { background: #eef2ff; color: #2563eb; padding: 5px 10px; font-size: 13px; }
+  button:disabled { opacity: .5; cursor: default; }
   #dl { margin-left: auto; }
   #tools { display: none; gap: 8px; margin: 10px 0 4px; }
   #tools.show { display: flex; }
@@ -91,6 +92,8 @@
     <b id="title"></b><span id="meta"></span>
     <button id="dl">Descargar Excel</button>
     <button id="dlesc" class="ghost">Escandallo</button>
+    <button id="recalc" class="ghost"
+            title="Vuelve a leer este artículo del ERP ahora mismo y, si es del catálogo, deja su coste al día en el catálogo y en el Excel">Recalcular</button>
   </div>
   <div id="tools">
     <button class="ghost" id="expand">Desplegar todo</button>
@@ -115,7 +118,7 @@
 const q = document.getElementById('q'), results = document.getElementById('results');
 const head = document.getElementById('head'), tools = document.getElementById('tools');
 const tbl = document.getElementById('tbl'), tbody = document.getElementById('tbody');
-let timer = null, current = null;
+let timer = null, current = null, currentDesc = '';
 let rows = [], byId = {};              // filas aplanadas del arbol
 const collapsed = new Set();
 
@@ -142,7 +145,7 @@ async function buscar() {
 async function cargar(codigo, desc) {
   results.classList.remove('show');
   q.value = codigo + ' — ' + desc;
-  current = codigo;
+  current = codigo; currentDesc = desc;
   document.getElementById('title').textContent = codigo + ' · ' + desc;
   document.getElementById('meta').textContent = 'Cargando…';
   head.classList.add('show');
@@ -155,7 +158,9 @@ async function cargar(codigo, desc) {
     data.lineas + ' líneas · ' + data.niveles + ' niveles &nbsp;·&nbsp; '
     + 'material <b>' + eur(data.coste_material) + ' €</b> · operación <b>' + eur(data.coste_operacion) + ' €</b> · '
     + 'total <b>' + eur(data.coste_total) + ' €</b>'
-    + (data.sin_precio ? ' · ⚠ ' + data.sin_precio + ' sin precio' : '');
+    + (data.sin_precio ? ' · ⚠ ' + data.sin_precio + ' sin precio' : '')
+    // los datos se recuerdan unos minutos: que se vea de cuando son
+    + (data.leido ? ' · <span style="color:#888">datos del ERP de las ' + data.leido + '</span>' : '');
 
   // aplanar el arbol en filas (orden pre-order) con profundidad y parentesco
   rows = []; byId = {}; collapsed.clear();
@@ -324,6 +329,28 @@ tbody.addEventListener('click', e => {
 document.getElementById('expand').addEventListener('click', () => { collapsed.clear(); refresh(); });
 document.getElementById('collapse').addEventListener('click', () => {
   rows.forEach(r => { if (r._kids) collapsed.add(r._id); }); refresh();
+});
+
+// Recalcular: vuelve a leer el articulo del ERP sin esperar a que caduque lo
+// recordado y, si es del catalogo, guarda su coste nuevo en el catalogo.
+document.getElementById('recalc').addEventListener('click', async () => {
+  if (!current) return;
+  const b = document.getElementById('recalc'), meta = document.getElementById('meta');
+  const codigo = current;
+  b.disabled = true; b.textContent = 'Recalculando…';
+  try {
+    const r = await fetch('/api/recalcular?codigo=' + encodeURIComponent(codigo), { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('error ' + r.status));
+    if (current !== codigo) return;          // mientras tanto se abrio otro articulo
+    await cargar(codigo, currentDesc);
+    meta.innerHTML += ' · <b style="color:#15803d">✓ recalculado'
+      + (d.en_catalogo ? ' y guardado en el catálogo' : ' (no es del catálogo, no se guarda)') + '</b>';
+  } catch (e) {
+    meta.innerHTML += ' · <b style="color:#b91c1c">✗ no se pudo recalcular: ' + esc(e.message) + '</b>';
+  } finally {
+    b.disabled = false; b.textContent = 'Recalcular';
+  }
 });
 
 document.getElementById('dl').addEventListener('click', () => {

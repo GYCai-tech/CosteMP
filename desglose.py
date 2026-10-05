@@ -9,8 +9,11 @@ Uso:
     py desglose.py 12101021 -o salidas/mi_desglose.xlsx
 """
 import argparse
+import datetime as dt
 import os
 import re
+import threading
+import time
 
 import pandas as pd
 from openpyxl.styles import PatternFill, Font
@@ -516,15 +519,77 @@ def buscar_articulos(q: str, limite: int = 50) -> pd.DataFrame:
         return pd.read_sql(SQL_BUSCAR, cn, params={"q": f"%{q}%", "limite": limite})
 
 
+# ---------------------------------------------------------------------------
+# Lo que se lee de UN articulo se recuerda unos minutos.
+#
+# Ver un articulo, descargar su Excel y volver a el pedia al ERP lo mismo tres
+# veces, y el despiece es la consulta cara (~0,4 s de CPU del SQL Server). El
+# coste no cambia de un minuto a otro, asi que 10 minutos de memoria no
+# enganan a nadie y evitan repetirla. Cada proceso (la web, la vigilancia)
+# tiene la suya.
+# ---------------------------------------------------------------------------
+CACHE_TTL_S = 600
+CACHE_MAX = 500          # articulos; la pasada del catalogo son ~550
+
+_cache = {}              # (que, codigo) -> (instante, valor, hora de lectura)
+_cache_lock = threading.Lock()
+
+
+def _limpiar(codigo) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", str(codigo))   # sanea el input
+
+
+def _recordado(que, codigo, leer):
+    """El valor de `leer()` para (que, codigo), del ERP como mucho una vez cada
+    CACHE_TTL_S segundos."""
+    clave, ahora = (que, codigo), time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(clave)
+        if hit and ahora - hit[0] < CACHE_TTL_S:
+            return hit[1]
+    valor = leer()
+    with _cache_lock:
+        if len(_cache) >= CACHE_MAX:
+            vivos = {k: v for k, v in _cache.items() if ahora - v[0] < CACHE_TTL_S}
+            if len(vivos) >= CACHE_MAX:   # todo vivo: fuera la mitad mas vieja
+                viejos = sorted(vivos, key=lambda k: vivos[k][0])[:CACHE_MAX // 2]
+                for k in viejos:
+                    del vivos[k]
+            _cache.clear()
+            _cache.update(vivos)
+        _cache[clave] = (ahora, valor, dt.datetime.now())
+    return valor
+
+
+def olvidar_cache():
+    """Vacia lo recordado (para los tests y por si hiciera falta forzarlo)."""
+    with _cache_lock:
+        _cache.clear()
+
+
+def olvidar_articulo(codigo):
+    """Olvida lo recordado de UN articulo: la proxima lectura va al ERP. Es lo
+    que hace el boton "Recalcular" de la pantalla del articulo."""
+    codigo = _limpiar(codigo)
+    with _cache_lock:
+        for k in [k for k in _cache if k[1] == codigo]:
+            del _cache[k]
+
+
+def leido_a(codigo):
+    """Cuando se leyo del ERP el despiece recordado del articulo (None si no
+    esta recordado). La pantalla lo ensena para que se sepa de cuando es."""
+    with _cache_lock:
+        hit = _cache.get(("desglose", _limpiar(codigo)))
+    return hit[2] if hit else None
+
+
 SQL_NOMBRE = text("SELECT Descrip FROM dbo.Articulos WHERE IdArticulo = :codigo")
 
 
 def nombre_articulo(codigo: str) -> str:
     """Devuelve la descripcion del articulo (cadena vacia si no existe)."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
-    with get_engine().connect() as cn:
-        r = cn.execute(SQL_NOMBRE, {"codigo": codigo}).fetchone()
-    return r[0] if r and r[0] else ""
+    return datos_raiz(codigo)["nombre"]
 
 
 # Tiempo del articulo RAIZ, con la misma prioridad que TiempoOp en el despiece:
@@ -570,12 +635,7 @@ def tiempo_operacion(codigo: str):
     es_medio vale 1 cuando el tiempo sale de la media de bonos, que es la
     fuente preferente; vale 0 cuando sale del tiempo teorico (mano de obra
     imputada en el ERP) porque no hay media utilizable."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
-    with get_engine().connect() as cn:
-        r = cn.execute(SQL_TIEMPO, {"codigo": codigo}).fetchone()
-    if not r or r[0] is None:
-        return None, 0
-    return float(r[0]), int(r[1] or 0)
+    return datos_raiz(codigo)["tiempo"]
 
 
 SQL_SIN_OPERACION = text("""
@@ -596,10 +656,7 @@ SELECT CASE WHEN EXISTS (
 def sin_operacion(codigo: str) -> int:
     """1 si la fase activa del articulo no declara operacion de fabricacion
     (todos sus trabajos son 'Sin operacion'). Para el nodo raiz del arbol."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
-    with get_engine().connect() as cn:
-        r = cn.execute(SQL_SIN_OPERACION, {"codigo": codigo}).fetchone()
-    return int(r[0]) if r else 0
+    return datos_raiz(codigo)["sin_operacion"]
 
 
 SQL_CON_ORDEN = text("""
@@ -616,10 +673,7 @@ SELECT CASE WHEN EXISTS (
 def con_orden(codigo: str) -> int:
     """1 si la fase activa del articulo declara una operacion (casilla
     OrdenTrabajo). Para el nodo raiz, que no sale como fila del CTE."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
-    with get_engine().connect() as cn:
-        r = cn.execute(SQL_CON_ORDEN, {"codigo": codigo}).fetchone()
-    return int(r[0]) if r else 0
+    return datos_raiz(codigo)["con_orden"]
 
 
 SQL_ES_EXTERNO = text("""
@@ -636,10 +690,7 @@ SELECT CASE WHEN EXISTS (
 def es_externo(codigo: str) -> int:
     """1 si la operacion del articulo esta marcada como EXTERNA en el ERP.
     Para el nodo raiz del arbol, que no sale como fila del CTE."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
-    with get_engine().connect() as cn:
-        r = cn.execute(SQL_ES_EXTERNO, {"codigo": codigo}).fetchone()
-    return int(r[0]) if r else 0
+    return datos_raiz(codigo)["es_externo"]
 
 
 # Precio de compra DEL PROPIO ARTICULO buscado cuando ademas tiene escandallo:
@@ -733,10 +784,39 @@ WHERE EXISTS (SELECT 1 FROM dbo.Fases_Salidas fs
 def coste_propio(codigo: str):
     """Precio de compra del propio articulo buscado cuando tiene escandallo: el
     trabajo que se le hace encima. None si no aplica. Se suma a sus materiales."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
+    return datos_raiz(codigo)["coste_propio"]
+
+
+def _leer_raiz(codigo: str) -> dict:
+    """Las seis consultas pequenas del articulo raiz, en UNA conexion.
+
+    Antes cada una abria la suya, y con pool_pre_ping cada apertura es ademas
+    un SELECT 1 al ERP: doce viajes por articulo en vez de seis."""
+    p = {"codigo": codigo}
     with get_engine().connect() as cn:
-        r = cn.execute(SQL_SERVICIO_EXTERNO, {"codigo": codigo}).fetchone()
-    return float(r[0]) if r and r[0] is not None else None
+        nombre = cn.execute(SQL_NOMBRE, p).fetchone()
+        tiempo = cn.execute(SQL_TIEMPO, p).fetchone()
+        sin_op = cn.execute(SQL_SIN_OPERACION, p).fetchone()
+        orden = cn.execute(SQL_CON_ORDEN, p).fetchone()
+        externo = cn.execute(SQL_ES_EXTERNO, p).fetchone()
+        propio = cn.execute(SQL_SERVICIO_EXTERNO, p).fetchone()
+    return {
+        "nombre": nombre[0] if nombre and nombre[0] else "",
+        "tiempo": ((None, 0) if not tiempo or tiempo[0] is None
+                   else (float(tiempo[0]), int(tiempo[1] or 0))),
+        "sin_operacion": int(sin_op[0]) if sin_op else 0,
+        "con_orden": int(orden[0]) if orden else 0,
+        "es_externo": int(externo[0]) if externo else 0,
+        "coste_propio": (float(propio[0]) if propio and propio[0] is not None
+                         else None),
+    }
+
+
+def datos_raiz(codigo: str) -> dict:
+    """Nombre, tiempo, sin_operacion, con_orden, es_externo y coste_propio del
+    articulo, leidos juntos y recordados CACHE_TTL_S segundos."""
+    codigo = _limpiar(codigo)
+    return _recordado("raiz", codigo, lambda: _leer_raiz(codigo))
 
 
 SQL_ESCANDALLO = text("""
@@ -754,16 +834,24 @@ ORDER BY fe.Descrip
 
 def escandallo_directo(codigo: str) -> pd.DataFrame:
     """Componentes DIRECTOS (nivel 0) del articulo, de su fase activa."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))
-    with get_engine().connect() as cn:
-        return pd.read_sql(SQL_ESCANDALLO, cn, params={"codigo": codigo})
+    codigo = _limpiar(codigo)
+
+    def leer():
+        with get_engine().connect() as cn:
+            return pd.read_sql(SQL_ESCANDALLO, cn, params={"codigo": codigo})
+    # copia: quien la recibe puede tocarla sin estropear la recordada
+    return _recordado("escandallo", codigo, leer).copy()
 
 
 def desglose(codigo: str) -> pd.DataFrame:
     """Devuelve el despiece multinivel del articulo como DataFrame."""
-    codigo = re.sub(r"[^A-Za-z0-9]", "", str(codigo))  # sanea el input
-    with get_engine().connect() as cn:
-        return pd.read_sql(SQL, cn, params={"codigo": codigo})
+    codigo = _limpiar(codigo)
+
+    def leer():
+        with get_engine().connect() as cn:
+            return pd.read_sql(SQL, cn, params={"codigo": codigo})
+    # copia: quien la recibe puede tocarla sin estropear la recordada
+    return _recordado("desglose", codigo, leer).copy()
 
 
 def articulos_comprados(df: pd.DataFrame) -> pd.DataFrame:

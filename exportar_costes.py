@@ -283,6 +283,41 @@ def publicar(pg, filas, huecos, parcial=False):
                 ON CONFLICT DO NOTHING"""), huecos)
 
 
+def publicar_calculados(pg, filas, huecos, parcial):
+    """Completa lo calculado con lo que falta del ERP (familia, datos de cada
+    hueco) y lo publica en Postgres.
+
+    Lo usan la pasada (`ejecutar`) y el recalculo de un articulo suelto
+    (`recalcular_articulo`). Un paso nuevo va AQUI, para que llegue a los dos:
+    si solo se anadiera a uno, el mismo articulo se publicaria distinto segun
+    quien lo hubiera calculado.
+    """
+    enriquecer_articulos(filas)
+    enriquecer(huecos)
+    publicar(pg, filas, huecos, parcial=parcial)
+
+
+def en_catalogo(pg, codigo):
+    """Si el articulo es uno de los del catalogo de costes."""
+    with pg.connect() as c:
+        return c.execute(text(
+            "SELECT 1 FROM core.cfg_catalogo_coste "
+            "WHERE idarticulo = :a AND activo"), {"a": codigo}).first() is not None
+
+
+def recalcular_articulo(pg, codigo):
+    """Recalcula UN articulo del catalogo y deja su coste al dia en Postgres y
+    en el libro de Excel, sin esperar a la pasada de cada pocos dias.
+
+    No escribe en core.log_coste_recalculo: ese log es el de las pasadas, y
+    /costes ensena la ultima como "ultimo calculo" del catalogo entero.
+    """
+    fila, huecos = calcular(codigo, dt.datetime.now())
+    publicar_calculados(pg, [fila], huecos, parcial=True)
+    exportar_fichero(pg)
+    return fila
+
+
 def ejecutar(pg, solo_pendientes=False, limite=None, origen="manual",
              progreso=None):
     """El recalculo completo, de principio a fin. Devuelve un resumen.
@@ -317,9 +352,7 @@ def ejecutar(pg, solo_pendientes=False, limite=None, origen="manual",
         if progreso:
             progreso(i, len(ids))
 
-    enriquecer_articulos(filas)
-    enriquecer(huecos)
-    publicar(pg, filas, huecos, parcial=solo_pendientes)
+    publicar_calculados(pg, filas, huecos, parcial=solo_pendientes)
 
     fin = dt.datetime.now()
     dur = round((fin - inicio).total_seconds(), 1)

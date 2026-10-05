@@ -7,13 +7,14 @@ Luego abrir http://127.0.0.1:5000
 """
 import io
 import math
+import re
 
 import openpyxl
 import pandas as pd
 from flask import Flask, request, jsonify, send_file, render_template
 
 from desglose import (buscar_articulos, con_orden, desglose, es_externo,
-                      nombre_articulo,
+                      nombre_articulo, olvidar_articulo, leido_a,
                       exportar_excel,
                       tiempo_operacion, escandallo_directo, sin_operacion,
                       coste_propio)
@@ -202,7 +203,44 @@ def api_desglose():
         "sin_precio": int(df["SinPrecio"].sum()) if not df.empty else 0,
         "filas": _records(df),
         "arbol": arbol,
+        # de cuando son los datos: se recuerdan unos minutos (ver desglose.py)
+        "leido": _hora(leido_a(codigo)),
     })
+
+
+def _hora(momento):
+    return momento.strftime("%H:%M") if momento else None
+
+
+@app.route("/api/recalcular", methods=["POST"])
+def api_recalcular():
+    """El boton "Recalcular" de la pantalla del articulo.
+
+    Vuelve a leer el articulo del ERP en ese momento, sin esperar a que caduque
+    lo recordado, y si es del catalogo deja su coste al dia en Postgres, en
+    /catalogo y en el libro de Excel sin esperar a la pasada de cada pocos
+    dias. Despues la pantalla pide /api/desglose, que ya sale de lo recien
+    leido: pulsar el boton cuesta UNA lectura del ERP, no dos.
+    """
+    # aqui dentro: exportar_costes importa de este modulo
+    import exportar_costes
+    from db_pg import get_pg_engine
+
+    codigo = re.sub(r"[^A-Za-z0-9]", "", request.args.get("codigo", ""))
+    if not codigo:
+        return jsonify(error="Falta el codigo del articulo"), 400
+    olvidar_articulo(codigo)
+    try:
+        pg = get_pg_engine()
+        catalogo = exportar_costes.en_catalogo(pg, codigo)
+        if catalogo:
+            exportar_costes.recalcular_articulo(pg, codigo)
+        else:
+            desglose(codigo)        # solo leerlo, para que la pantalla lo pinte
+    except Exception as ex:                                   # noqa: BLE001
+        return jsonify(error=str(ex)[:300]), 500
+    return jsonify(ok=True, codigo=codigo, en_catalogo=catalogo,
+                   leido=_hora(leido_a(codigo)))
 
 
 @app.route("/api/escandallo")
