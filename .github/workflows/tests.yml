@@ -34,6 +34,7 @@ jobs:
           docker cp db_pg.py costemp-ci:/app/db_pg.py
           docker cp web_costes.py costemp-ci:/app/web_costes.py
           docker cp exportar_costes.py costemp-ci:/app/exportar_costes.py
+          docker cp vigilar_costes.py costemp-ci:/app/vigilar_costes.py
           docker cp templates/. costemp-ci:/app/templates/
           docker cp tests/. costemp-ci:/app/tests/
 

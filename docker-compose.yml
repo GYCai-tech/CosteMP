@@ -19,7 +19,8 @@ services:
       - ${COSTES_DATOS_DIR:-./salidas}:/datos
     restart: unless-stopped
 
-  # Mantiene el coste al dia sin que nadie tenga que acordarse de nada.
+  # Recalcula el coste del catalogo entero cada 3 dias sin que nadie tenga que
+  # acordarse.
   # Va en su propio contenedor y no como hilo dentro de la web porque un
   # recalculo de 4 minutos bloqueando el servidor web es mala idea, y porque
   # asi se reinicia solo si se cae sin llevarse la aplicacion por delante.
@@ -34,15 +35,17 @@ services:
     environment:
       - COSTES_SALIDA_XLSX=/datos/datos_costes.xlsx
       # Ademas de las fechas, la hora local es la que decide cuando salta la
-      # pasada diaria: en UTC saltaria a las 11:00 hora espanola.
+      # pasada: en UTC saltaria una o dos horas mas tarde, con la planta ya
+      # trabajando contra el mismo ERP.
       - TZ=Europe/Madrid
     volumes:
       - ${COSTES_DATOS_DIR:-./salidas}:/datos
-    # Cada 10 min mira si alguien toco el ERP y recalcula SOLO si cambio algo
-    # (si no, tarda milisegundos). Y una pasada entera cada manana a las 9:00,
-    # que es la unica que detecta un articulo que vuelve a romperse porque se
-    # abrio una rama dentro de el.
-    command: python vigilar_costes.py --bucle 600 --completo-a 09:00
+    # Una pasada entera cada 3 dias a las 05:00, antes del turno y lejos de las
+    # copias del ERP (01:00 y 06:30). Cada 15 min solo mira en Postgres si ya
+    # toca: entre pasadas NO consulta el ERP. Antes lo miraba cada 10 min y
+    # recalculaba en cuanto alguien tocaba algo: ~4.000 despieces al dia, el
+    # 17 % de la CPU del SQL Server del ERP (05/10/2026).
+    command: python vigilar_costes.py --bucle 900 --cada-dias 3 --a 05:00
     restart: unless-stopped
 
 # COSTES_DATOS_DIR es la carpeta compartida VISTA DESDE EL HOST. Se define en
