@@ -32,7 +32,7 @@ from desglose import (coste_propio, desglose, nombre_articulo, sin_operacion,
                       tiempo_operacion)
 from app import avisos_arbol, construir_arbol
 
-DDL = pathlib.Path(__file__).with_name("sql") / "01_coste_objetos.sql"
+SQL_DIR = pathlib.Path(__file__).with_name("sql")
 # respaldo por si la tabla de catalogo esta vacia (primer arranque)
 CATALOGO_TXT = r"C:\Users\santiago.arce\Desktop\costes\catalogo.txt"
 
@@ -88,8 +88,23 @@ def exportar_fichero(pg):
 
 
 def crear_objetos(pg):
+    """Aplica TODOS los ficheros de sql/, en orden por nombre.
+
+    Antes solo se aplicaba 01_coste_objetos.sql y los demas (las vistas del
+    libro de Excel, los pendientes, los articulos) se habian ejecutado a mano
+    contra la base. Eso significaba que un despliegue limpio no reproducia lo
+    que hay en produccion, y que un fichero nuevo en sql/ no llegaba a
+    aplicarse nunca. Todos son idempotentes (CREATE TABLE IF NOT EXISTS /
+    CREATE OR REPLACE VIEW / ADD COLUMN IF NOT EXISTS), asi que reaplicarlos
+    en cada --crear no rompe nada.
+
+    Van en UNA transaccion: si uno falla, no queda la base a medio migrar.
+    """
+    ficheros = sorted(SQL_DIR.glob("*.sql"))
     with pg.begin() as c:
-        c.execute(text(DDL.read_text(encoding="utf-8")))
+        for f in ficheros:
+            c.execute(text(f.read_text(encoding="utf-8")))
+    return [f.name for f in ficheros]
 
 
 def leer_pendientes(pg):
@@ -243,6 +258,64 @@ def enriquecer_articulos(filas):
         f["familia"] = fam.get(f["idarticulo"])
 
 
+def enriquecer_tarifa(filas):
+    """Anade a cada articulo su precio de venta de la tarifa VIGENTE del ERP.
+
+    El precio de venta vive en SQL Server y el coste en Postgres, asi que no se
+    pueden cruzar en una vista. Se trae aqui, junto al coste, para que el margen
+    quede publicado en gyc_analytics y lo puedan leer Excel y Power BI. Si solo
+    viviera en la pagina web, alguien lo copiaria a mano a un libro y volveria a
+    haber dos verdades.
+
+    NO se fija el IdLista. Las listas PV1-PV4 tienen HastaFecha en 1931 (dato
+    basura del ERP), asi que filtrar por fecha vigente deja hoy exactamente una:
+    "Tarifa Catalogo 2026". Cuando alguien cree la de 2027 con sus fechas, esto
+    la coge solo, sin tocar codigo.
+
+    Comprobado el 01/09/2026: una sola lista vigente y un unico precio por
+    articulo (ningun articulo tiene varios tramos de DesdeUnidades). Aun asi se
+    coge el tramo mas bajo, que es el precio de la venta mas pequena, por si
+    manana alguien mete escalados.
+    """
+    for f in filas:                        # el INSERT necesita las claves SIEMPRE
+        f.setdefault("precio_tarifa", None)
+        f.setdefault("tarifa_nombre", None)
+        f.setdefault("tarifa_desde_uds", None)
+    if not filas:
+        return
+    ids = sorted({f["idarticulo"] for f in filas})
+    tar = {}
+    with get_engine().connect() as c:
+        for i in range(0, len(ids), 500):           # el IN de SQL Server tiene tope
+            lote = ids[i:i + 500]
+            marcas = ", ".join(f":p{j}" for j in range(len(lote)))
+            for r in c.execute(text(f"""
+                SELECT p.IdArticulo, p.Precio, l.Descrip, p.DesdeUnidades
+                FROM dbo.Listas_Precios_Cli_Art p
+                INNER JOIN dbo.Listas_Precios_Cli l ON l.IdLista = p.IdLista
+                WHERE l.DesdeFecha <= GETDATE()
+                  AND l.HastaFecha >= GETDATE()
+                  AND p.Precio > 0
+                  AND p.IdArticulo IN ({marcas})
+                  -- si hubiera escalados, el tramo mas bajo
+                  AND p.DesdeUnidades = (
+                        SELECT MIN(p2.DesdeUnidades)
+                        FROM dbo.Listas_Precios_Cli_Art p2
+                        INNER JOIN dbo.Listas_Precios_Cli l2 ON l2.IdLista = p2.IdLista
+                        WHERE p2.IdArticulo = p.IdArticulo
+                          AND l2.DesdeFecha <= GETDATE()
+                          AND l2.HastaFecha >= GETDATE()
+                          AND p2.Precio > 0)"""),
+                {f"p{j}": v for j, v in enumerate(lote)}):
+                tar[r[0]] = r
+    for f in filas:
+        r = tar.get(f["idarticulo"])
+        if r:
+            f["precio_tarifa"] = round(float(r[1]), 4)
+            f["tarifa_nombre"] = r[2]
+            f["tarifa_desde_uds"] = float(r[3]) if r[3] is not None else None
+
+
 def publicar(pg, filas, huecos, parcial=False):
     """Sustituye el contenido de las dos tablas en UNA transaccion.
 
@@ -265,12 +338,14 @@ def publicar(pg, filas, huecos, parcial=False):
                   (idarticulo, descripcion, familia, coste_material, coste_operacion,
                    coste_total, piezas_sin_coste, piezas_sin_escandallo,
                    piezas_sin_tipo, piezas_sin_precio,
-                   piezas_sin_tiempo, completo, error, fecha_calculo)
+                   piezas_sin_tiempo, completo, error, fecha_calculo,
+                   precio_tarifa, tarifa_nombre, tarifa_desde_uds)
                 VALUES
                   (:idarticulo, :descripcion, :familia, :coste_material, :coste_operacion,
                    :coste_total, :piezas_sin_coste, :piezas_sin_escandallo,
                    :piezas_sin_tipo, :piezas_sin_precio,
-                   :piezas_sin_tiempo, :completo, :error, :fecha_calculo)"""), filas)
+                   :piezas_sin_tiempo, :completo, :error, :fecha_calculo,
+                   :precio_tarifa, :tarifa_nombre, :tarifa_desde_uds)"""), filas)
         if huecos:
             c.execute(text("""
                 INSERT INTO core.fact_coste_hueco
@@ -284,8 +359,8 @@ def publicar(pg, filas, huecos, parcial=False):
 
 
 def publicar_calculados(pg, filas, huecos, parcial):
-    """Completa lo calculado con lo que falta del ERP (familia, datos de cada
-    hueco) y lo publica en Postgres.
+    """Completa lo calculado con lo que falta del ERP (familia, precio de la
+    tarifa vigente, datos de cada hueco) y lo publica en Postgres.
 
     Lo usan la pasada (`ejecutar`) y el recalculo de un articulo suelto
     (`recalcular_articulo`). Un paso nuevo va AQUI, para que llegue a los dos:
@@ -293,6 +368,7 @@ def publicar_calculados(pg, filas, huecos, parcial):
     quien lo hubiera calculado.
     """
     enriquecer_articulos(filas)
+    enriquecer_tarifa(filas)
     enriquecer(huecos)
     publicar(pg, filas, huecos, parcial=parcial)
 
@@ -378,8 +454,10 @@ def main():
 
     pg = get_pg_engine()
     if args.crear:
-        crear_objetos(pg)
-        print("Objetos verificados/creados en core.*")
+        aplicados = crear_objetos(pg)
+        print("Objetos verificados/creados en core.* desde:")
+        for n in aplicados:
+            print("   ", n)
 
     t0 = time.time()
     print("Recalculando" + (" SOLO PENDIENTES" if args.solo_pendientes else
