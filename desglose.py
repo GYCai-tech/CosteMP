@@ -471,6 +471,9 @@ SELECT
     -- 1 = su fase activa declara una operacion (casilla OrdenTrabajo marcada).
     -- Es lo unico con lo que se etiqueta una fila como "fabricado".
     CASE WHEN co.IdArticulo IS NOT NULL THEN 1 ELSE 0 END AS ConOrden,
+    -- 1 = anulado en el ERP (Articulos.Estado = 1, ver SQL_BUSCAR). Solo
+    -- etiqueta: sigue en el escandallo y se costea igual.
+    CASE WHEN art.Estado = 1 THEN 1 ELSE 0 END AS Anulado,
     m.Ruta AS Ruta                                 -- ruta jerarquica para el arbol
 FROM marcado m
 LEFT JOIN dbo.Articulos  art ON art.IdArticulo = m.IdArticulo
@@ -584,12 +587,17 @@ def leido_a(codigo):
     return hit[2] if hit else None
 
 
-SQL_NOMBRE = text("SELECT Descrip FROM dbo.Articulos WHERE IdArticulo = :codigo")
+SQL_NOMBRE = text("SELECT Descrip, Estado FROM dbo.Articulos WHERE IdArticulo = :codigo")
 
 
 def nombre_articulo(codigo: str) -> str:
     """Devuelve la descripcion del articulo (cadena vacia si no existe)."""
     return datos_raiz(codigo)["nombre"]
+
+
+def anulado(codigo: str) -> int:
+    """1 si el articulo esta anulado en el ERP (Articulos.Estado = 1)."""
+    return datos_raiz(codigo)["anulado"]
 
 
 # Tiempo del articulo RAIZ, con la misma prioridad que TiempoOp en el despiece:
@@ -802,6 +810,7 @@ def _leer_raiz(codigo: str) -> dict:
         propio = cn.execute(SQL_SERVICIO_EXTERNO, p).fetchone()
     return {
         "nombre": nombre[0] if nombre and nombre[0] else "",
+        "anulado": 1 if nombre and nombre[1] == 1 else 0,
         "tiempo": ((None, 0) if not tiempo or tiempo[0] is None
                    else (float(tiempo[0]), int(tiempo[1] or 0))),
         "sin_operacion": int(sin_op[0]) if sin_op else 0,
@@ -813,7 +822,7 @@ def _leer_raiz(codigo: str) -> dict:
 
 
 def datos_raiz(codigo: str) -> dict:
-    """Nombre, tiempo, sin_operacion, con_orden, es_externo y coste_propio del
+    """Nombre, anulado, tiempo, sin_operacion, con_orden, es_externo y coste_propio del
     articulo, leidos juntos y recordados CACHE_TTL_S segundos."""
     codigo = _limpiar(codigo)
     return _recordado("raiz", codigo, lambda: _leer_raiz(codigo))
@@ -889,7 +898,7 @@ def _s(v):
 
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                     servicio_raiz=None, medio_raiz=0, externo_raiz=0,
-                    con_orden_raiz=0):
+                    con_orden_raiz=0, anulado_raiz=0):
     """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
     fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo.
 
@@ -905,6 +914,8 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             # no cambia ni el coste ni los avisos
             "externo": int(externo_raiz or 0),
             "con_orden": int(con_orden_raiz or 0),
+            # anulado en el ERP (Articulos.Estado = 1): solo etiqueta
+            "anulado": int(anulado_raiz or 0),
             "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
@@ -928,6 +939,7 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                 "tiempo_medio": int(r.get("TiempoMedio", 0) or 0),
                 "externo": int(r.get("EsExterno", 0) or 0),
                 "con_orden": int(r.get("ConOrden", 0) or 0),
+                "anulado": int(r.get("Anulado", 0) or 0),
                 "coste": _num(r["Coste"]) or 0.0, "hijos": []}
         nodos[ruta] = nodo
         padre_key = ("|" + "|".join(segs[:-1]) + "|") if len(segs) > 1 else f"|{codigo}|"
@@ -1051,7 +1063,7 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     tiempo_raiz, medio_raiz = tiempo_operacion(codigo)
     arbol = construir_arbol(df, codigo, nombre, tiempo_raiz, sin_operacion(codigo),
                             coste_propio(codigo), medio_raiz, es_externo(codigo),
-                            con_orden(codigo))
+                            con_orden(codigo), anulado(codigo))
     filas = aplanar_arbol(arbol)
 
     # ---- Hoja Desglose: el arbol indentado, con material y operacion ----
@@ -1071,6 +1083,9 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
                     # puede deducir que se compre (ver la nota de con_orden).
                     else ("fabricado" if not hoja and n.get("con_orden")
                           else (n.get("tipo") or "")))
+        # anulado en el ERP: se añade a lo que ya diga la columna, no lo pisa
+        if n.get("anulado"):
+            tipo_txt = (tipo_txt + " · " if tipo_txt else "") + "ANULADO"
         reg.append({
             "Nivel": depth,
             "Componente": ("    " * depth) + (n.get("nombre") or ""),

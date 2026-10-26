@@ -57,6 +57,7 @@
   .badge-t { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; }
   /* operacion marcada como EXTERNA en el ERP (Trabajos_Operacion.Externo) */
   .badge-x { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #ffedd5; color: #9a3412; }
+  .badge-anul { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #fee2e2; color: #b91c1c; font-weight: 600; margin-left: 6px; }
   /* tiempo estimado con la media de bonos, no imputado en el ERP. Verde azulado
      para que no se confunda con los otros distintivos (morado, azul, ámbar). */
   .badge-teo { font-size: 10px; padding: 1px 5px; border-radius: 999px; background: #ccfbf1; color: #0f766e; }
@@ -290,7 +291,8 @@ function renderRow(r) {
   return `<tr id="r${r._id}" class="${cls}" data-id="${r._id}">
     <td>${r._depth}</td>
     <td class="name" style="padding-left:${6 + r._depth * 16}px">
-      <span class="arrow ${r._kids ? '' : 'leaf'}">${arrow}</span>${esc(n.nombre || '')}</td>
+      <span class="arrow ${r._kids ? '' : 'leaf'}">${arrow}</span>${esc(n.nombre || '')}${n.anulado
+        ? '<span class="badge-anul" title="Artículo anulado en el ERP (Estado = 1). Sigue en el escandallo y se costea igual">anulado</span>' : ''}</td>
     <td class="code">${n.id}</td>
     <td class="num">${fmt(n.cant)}</td>
     <td>${esc(n.unidad || '')}</td>
