@@ -77,12 +77,16 @@ def test_ciclo_fase_conjunto_con_varios_componentes_no_se_toca():
     es el caso degenerado: el conjunto no esta hecho de 1 sola unidad de si
     mismo). La primera version del fix rompio este caso por un error de
     precedencia de operadores (AND en vez de OR) y lo dejo sin escandallo.
-    No debe volver a pasar."""
+    No debe volver a pasar.
+
+    El 23/09/2026 se activo en el ERP una fase nueva (4673) para 61000165 con
+    la CHAPA LACADA 61000166 de entrada. Como la fase activa manda sobre el
+    conjunto, sus tapas ya no se despiezan: ahora se comprueba la chapa."""
     df = desglose("61000165")
     ids = set(df["IdArticulo"])
-    assert {"60703023", "60703024"} <= ids, (
+    assert "61000166" in ids, (
         f"61000165 solo tiene estos componentes: {ids}. Deberia conservar "
-        "sus 2 piezas reales (60703023 TAPA SUP. y 60703024 TAPA INF.)."
+        "la entrada de su fase activa (61000166 CHAPA LACADA VERDE)."
     )
 
 
