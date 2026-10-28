@@ -1,0 +1,6 @@
+# Límites de memoria (migración 10.0.0.7). Evitan que un contenedor tumbe el servidor.
+services:
+  costemp:
+    mem_limit: 512m
+  costemp-vigilante:
+    mem_limit: 512m
