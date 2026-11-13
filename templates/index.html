@@ -83,6 +83,9 @@
 </head>
 <body>
   <h1>Costes Directos
+    <a href="/piezas" style="float:right;margin-left:18px;font-size:13px;font-weight:400;color:#2563eb;text-decoration:none">Piezas</a>
+    <a href="/evolucion" style="float:right;margin-left:18px;font-size:13px;font-weight:400;color:#2563eb;text-decoration:none">Evolución</a>
+    <a href="/configuracion" style="float:right;margin-left:18px;font-size:13px;font-weight:400;color:#2563eb;text-decoration:none">Configuración</a>
     <a href="/lote" style="float:right;font-size:13px;font-weight:400;color:#2563eb;text-decoration:none">Coste por lote →</a>
   </h1>
 
@@ -157,7 +160,8 @@ async function cargar(codigo, desc) {
   }
   document.getElementById('meta').innerHTML =
     data.lineas + ' líneas · ' + data.niveles + ' niveles &nbsp;·&nbsp; '
-    + 'material <b>' + eur(data.coste_material) + ' €</b> · operación <b>' + eur(data.coste_operacion) + ' €</b> · '
+    + 'material <b>' + eur(data.coste_material) + ' €</b> · operación <b>' + eur(data.coste_operacion) + ' €</b>'
+    + (data.coste_hora ? ' <span style="color:#888">(a ' + (+data.coste_hora).toLocaleString('es-ES', {maximumFractionDigits: 2}) + ' €/h)</span>' : '') + ' · '
     + 'total <b>' + eur(data.coste_total) + ' €</b>'
     + (data.sin_precio ? ' · ⚠ ' + data.sin_precio + ' sin precio' : '')
     // los datos se recuerdan unos minutos: que se vea de cuando son
@@ -174,7 +178,7 @@ async function cargar(codigo, desc) {
       const kids = n.hijos && n.hijos.length;
       // el articulo buscado: se pinta SIEMPRE como primera fila (ver abajo),
       // pero no cuenta como hueco -- sus avisos son los de sus piezas. Mismo
-      // criterio que avisos_arbol() en app.py, que arranca en arbol.hijos.
+      // criterio que avisos_arbol() en desglose.py, que arranca en arbol.hijos.
       const esRaizConPiezas = depth === 0 && kids;
       rows.push(byId[id] = { _id: id, _parent: parent, _depth: depth, _kids: !!kids, n });
       if (kids) {                                                      // rama = pieza fabricada
@@ -372,6 +376,10 @@ const eur = n => {
   return v.toLocaleString('es-ES', {minimumFractionDigits: 4, maximumFractionDigits: dec});
 };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// /?codigo=...&desc=... abre ese articulo directamente (enlaces de /piezas y /evolucion)
+const _url = new URLSearchParams(location.search);
+if (_url.get('codigo')) cargar(_url.get('codigo'), _url.get('desc') || '');
 </script>
 </body>
 </html>

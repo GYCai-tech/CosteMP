@@ -16,6 +16,7 @@ import pandas as pd
 from flask import Blueprint, jsonify, render_template, request, send_file
 from sqlalchemy import text
 
+import exportar_costes
 from db_pg import get_pg_engine
 
 bp = Blueprint("costes", __name__)
@@ -47,10 +48,6 @@ def _resumen():
 
 def _trabajar(solo_pendientes):
     """Hilo del recalculo. Actualiza _estado para que la pagina pinte el avance."""
-    # el import va aqui dentro: exportar_costes importa de app.py, y app.py
-    # registra este blueprint al arrancar -> arriba seria circular
-    import exportar_costes
-
     def progreso(hechos, total):
         with _lock:
             _estado["hechos"], _estado["total"] = hechos, total

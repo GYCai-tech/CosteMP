@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Piezas y simulador</title>
+<style>
+  :root {
+    --tinta:#1a1d21; --suave:#5b666d; --tenue:#8a959b;
+    --fondo:#f5f7f8; --panel:#fff; --linea:#dde4e8;
+    --acento:#2e5a78; --sube:#9b2c2c; --baja:#2f6b3c; --aviso:#a64b14;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--tinta);
+         font:15px/1.55 "Segoe UI",system-ui,sans-serif; }
+  .caja { max-width:1180px; margin:0 auto; padding:32px 20px 64px; }
+  a { color:var(--acento); text-decoration:none; } a:hover { text-decoration:underline; }
+  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 20px; margin-bottom:24px; }
+  h1 { font-size:26px; margin:0; letter-spacing:-.02em; }
+  h2 { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.08em;
+       color:var(--tenue); margin:0 0 8px; }
+  nav { margin-left:auto; display:flex; flex-wrap:wrap; gap:16px; font-size:14px; }
+  section { margin-bottom:28px; }
+  .panel { background:var(--panel); border:1px solid var(--linea); border-radius:8px; }
+
+  input, select { font:inherit; padding:6px 10px; border:1px solid var(--linea); border-radius:6px;
+                  background:var(--panel); color:var(--tinta); }
+  input[type=search] { min-width:300px; margin-bottom:12px; }
+  button { font:inherit; font-weight:600; padding:6px 14px; border-radius:6px; cursor:pointer;
+           border:1px solid var(--acento); background:var(--acento); color:#fff; }
+  button.sec { background:transparent; color:var(--acento); font-weight:500; padding:3px 10px; font-size:13px; }
+  button.x { background:transparent; border:0; color:var(--tenue); font-size:18px; padding:0 6px; }
+
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:8px 12px; border-bottom:1px solid #eef2f4; font-size:14px; }
+  th { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--tenue);
+       background:#f8fafb; white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.pz { cursor:pointer; } tr.pz:hover td { background:#f8fafb; }
+  tr.det td { background:#fbfcfd; padding:4px 12px 14px 32px; }
+  tr.det table th { background:transparent; }
+  .sube { color:var(--sube); } .baja { color:var(--baja); }
+  .etq { font-size:11px; font-weight:600; padding:1px 6px; border-radius:99px; background:#f9ede4;
+         color:var(--aviso); margin-left:6px; white-space:nowrap; }
+  .vacio { padding:22px; text-align:center; color:var(--tenue); font-size:14px; }
+
+  #sim { display:none; }
+  .elegidas { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
+  .elegida { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .elegida .nom { flex:1; min-width:200px; }
+  .elegida input { width:80px; text-align:right; }
+  .acciones { padding:0 16px 14px; display:flex; gap:10px; align-items:center; }
+  .cifras { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:14px 0; }
+  .cifra { background:var(--panel); border:1px solid var(--linea); border-radius:8px; padding:14px 16px; }
+  .cifra .n { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .cifra .t { font-size:12px; color:var(--tenue); text-transform:uppercase; letter-spacing:.07em; }
+  #error { color:var(--sube); font-size:14px; }
+  @media (max-width:640px) { nav { margin-left:0; } input[type=search] { min-width:0; width:100%; } }
+</style>
+</head>
+<body>
+<div class="caja">
+  <header>
+    <h1>Piezas y simulador</h1>
+    <nav>
+      <a href="/">Buscador</a><a href="/catalogo">Catálogo</a><a href="/evolucion">Evolución</a>
+      <a href="/costes">Costes</a><a href="/configuracion">Configuración</a>
+    </nav>
+  </header>
+
+  <section id="sim">
+    <h2>Simulador de precios</h2>
+    <div class="panel">
+      <div class="elegidas" id="elegidas"></div>
+      <div class="acciones">
+        <button id="calcular">Calcular</button><span id="error"></span>
+      </div>
+    </div>
+    <div id="resultado"></div>
+  </section>
+
+  <section>
+    <h2>Piezas compradas del catálogo</h2>
+    <input type="search" id="buscar" placeholder="Buscar pieza o descripción…">
+    <div class="panel scroll">
+      <table>
+        <thead><tr>
+          <th>Pieza</th><th>Descripción</th><th>Tipo</th><th class="n">Precio</th>
+          <th class="n">Artículos</th><th class="n">En lo vendido 12m</th><th></th>
+        </tr></thead>
+        <tbody id="lista"><tr><td colspan="7" class="vacio">Cargando…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const eur = (v, d = 2) => v == null ? '—' : v.toLocaleString('es-ES', {minimumFractionDigits: d, maximumFractionDigits: d});
+// useGrouping 'always': en es-ES los numeros de 4 cifras salen sin punto (6177)
+const ent = v => v == null ? '—' : Math.round(v).toLocaleString('es-ES', {useGrouping: 'always'});
+const pct = v => v == null ? '—' : eur(v, 1) + ' %';
+const signo = v => v > 0 ? '+' : '';
+const clase = v => v > 0.00005 ? 'sube' : v < -0.00005 ? 'baja' : '';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const elegidas = new Map();     // pieza -> {desc, pct}
+
+let espera;
+async function buscar() {
+  const r = await (await fetch('/piezas/buscar?q=' + encodeURIComponent($('#buscar').value.trim()))).json();
+  $('#lista').innerHTML = r.length ? r.map(p => `
+    <tr class="pz" data-id="${esc(p.pieza)}" data-desc="${esc(p.desc)}">
+      <td>${esc(p.pieza)}</td><td>${esc(p.desc)}</td><td>${esc(p.tipo || '')}</td>
+      <td class="n">${eur(p.precio, 4)}</td><td class="n">${p.articulos}</td>
+      <td class="n">${ent(p.en_ventas)} €</td>
+      <td class="n"><button class="sec" data-simular>+ Simular</button></td>
+    </tr>`).join('')
+    : '<tr><td colspan="7" class="vacio">Ninguna pieza. Si está vacío del todo, el detalle por pieza se guarda a partir de la próxima pasada.</td></tr>';
+}
+
+$('#lista').addEventListener('click', async ev => {
+  const tr = ev.target.closest('tr.pz'); if (!tr) return;
+  if (ev.target.closest('[data-simular]')) {
+    elegidas.set(tr.dataset.id, {desc: tr.dataset.desc, pct: elegidas.get(tr.dataset.id)?.pct ?? '10'});
+    pintarElegidas(); $('#sim').scrollIntoView({behavior: 'smooth'}); return;
+  }
+  // al pulsar la fila: en que articulos entra
+  if (tr.nextElementSibling && tr.nextElementSibling.classList.contains('det')) {
+    tr.nextElementSibling.remove(); return;
+  }
+  const det = document.createElement('tr'); det.className = 'det';
+  det.innerHTML = '<td colspan="7">Cargando…</td>'; tr.after(det);
+  const r = await (await fetch('/piezas/' + encodeURIComponent(tr.dataset.id))).json();
+  det.innerHTML = `<td colspan="7"><table><thead><tr>
+      <th>Artículo</th><th>Descripción</th><th class="n">Cantidad</th><th class="n">Coste pieza</th>
+      <th class="n">Coste artículo</th><th class="n">Peso</th><th class="n">Margen</th><th class="n">Vendidas 12m</th>
+    </tr></thead><tbody>` + r.map(a => `<tr>
+      <td><a href="/?codigo=${encodeURIComponent(a.id)}&desc=${encodeURIComponent(a.desc || '')}">${esc(a.id)}</a></td><td>${esc(a.desc)}</td>
+      <td class="n">${eur(a.cantidad, 4)} ${esc(a.unidad || '')}</td>
+      <td class="n">${eur(a.coste_pieza, 4)}</td><td class="n">${eur(a.coste_total, 4)}</td>
+      <td class="n">${pct(a.peso)}</td><td class="n">${pct(a.margen)}</td><td class="n">${ent(a.uds_12m)}</td>
+    </tr>`).join('') + '</tbody></table></td>';
+});
+
+function pintarElegidas() {
+  $('#sim').style.display = elegidas.size ? 'block' : 'none';
+  $('#elegidas').innerHTML = [...elegidas].map(([id, e]) => `
+    <div class="elegida" data-id="${esc(id)}">
+      <span class="nom"><b>${esc(id)}</b> · ${esc(e.desc)}</span>
+      <input value="${esc(e.pct)}" inputmode="decimal" aria-label="Porcentaje"> %
+      <button class="x" title="Quitar">×</button>
+    </div>`).join('');
+}
+$('#elegidas').addEventListener('input', ev => {
+  const d = ev.target.closest('.elegida'); elegidas.get(d.dataset.id).pct = ev.target.value;
+});
+$('#elegidas').addEventListener('click', ev => {
+  if (!ev.target.matches('button.x')) return;
+  elegidas.delete(ev.target.closest('.elegida').dataset.id); pintarElegidas();
+  if (!elegidas.size) $('#resultado').innerHTML = '';
+});
+
+$('#calcular').addEventListener('click', async () => {
+  $('#error').textContent = '';
+  const r = await fetch('/piezas/simular', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cambios: [...elegidas].map(([pieza, e]) => ({pieza, pct: e.pct}))})});
+  const d = await r.json();
+  if (!r.ok) { $('#error').textContent = d.error; return; }
+  const s = d.resumen;
+  $('#resultado').innerHTML = `<div class="cifras">
+      <div class="cifra"><div class="n">${s.articulos}</div><div class="t">Artículos afectados</div></div>
+      <div class="cifra"><div class="n ${clase(s.impacto_anual)}">${signo(s.impacto_anual) + ent(s.impacto_anual)} €</div>
+        <div class="t">Impacto anual</div></div>
+      <div class="cifra"><div class="n ${s.bajo_coste ? 'sube' : ''}">${s.bajo_coste}</div>
+        <div class="t">Pasan a perder dinero</div></div>
+    </div>
+    <div class="panel scroll"><table><thead><tr>
+      <th>Artículo</th><th>Descripción</th><th class="n">Coste</th><th class="n">Cambio</th>
+      <th class="n">Coste nuevo</th><th class="n">Margen</th><th class="n">Margen nuevo</th>
+      <th class="n">Vendidas 12m</th><th class="n">Impacto anual</th>
+    </tr></thead><tbody>` + d.articulos.map(a => `<tr>
+      <td>${esc(a.id)}</td>
+      <td>${esc(a.desc)}${a.completo ? '' : '<span class="etq">coste incompleto</span>'}</td>
+      <td class="n">${eur(a.coste, 4)}</td>
+      <td class="n ${clase(a.delta)}">${signo(a.delta) + eur(a.delta, 4)}</td>
+      <td class="n">${eur(a.nuevo, 4)}</td><td class="n">${pct(a.margen)}</td>
+      <td class="n ${a.margen_nuevo != null && a.margen_nuevo < 0 ? 'sube' : ''}">${pct(a.margen_nuevo)}</td>
+      <td class="n">${ent(a.uds_12m)}</td>
+      <td class="n ${clase(a.impacto_anual)}">${signo(a.impacto_anual) + ent(a.impacto_anual)} €</td>
+    </tr>`).join('') + '</tbody></table></div>';
+});
+
+$('#buscar').addEventListener('input', () => { clearTimeout(espera); espera = setTimeout(buscar, 250); });
+buscar();
+</script>
+</body>
+</html>

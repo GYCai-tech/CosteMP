@@ -42,6 +42,10 @@ docker cp "$REPO_ROOT/db.py" "$CONTAINER:/app/db.py"
 docker cp "$REPO_ROOT/db_pg.py" "$CONTAINER:/app/db_pg.py"
 docker cp "$REPO_ROOT/web_costes.py" "$CONTAINER:/app/web_costes.py"
 docker cp "$REPO_ROOT/exportar_costes.py" "$CONTAINER:/app/exportar_costes.py"
+# y web_config (la pagina /configuracion) con el SQL de sus tablas
+docker cp "$REPO_ROOT/web_config.py" "$CONTAINER:/app/web_config.py"
+docker cp "$REPO_ROOT/web_analisis.py" "$CONTAINER:/app/web_analisis.py"
+docker cp "$REPO_ROOT/sql/." "$CONTAINER:/app/sql/"
 docker cp "$REPO_ROOT/templates/." "$CONTAINER:/app/templates/"
 docker cp "$REPO_ROOT/tests/." "$CONTAINER:/app/tests/"
 

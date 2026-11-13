@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evolución del coste</title>
+<style>
+  :root {
+    --tinta:#1a1d21; --suave:#5b666d; --tenue:#8a959b;
+    --fondo:#f5f7f8; --panel:#fff; --linea:#dde4e8;
+    --acento:#2e5a78; --sube:#9b2c2c; --baja:#2f6b3c; --aviso:#a64b14;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--tinta);
+         font:15px/1.55 "Segoe UI",system-ui,sans-serif; }
+  .caja { max-width:1180px; margin:0 auto; padding:32px 20px 64px; }
+  a { color:var(--acento); text-decoration:none; } a:hover { text-decoration:underline; }
+  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 20px; margin-bottom:24px; }
+  h1 { font-size:26px; margin:0; letter-spacing:-.02em; }
+  nav { margin-left:auto; display:flex; flex-wrap:wrap; gap:16px; font-size:14px; }
+
+  .controles { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:18px; }
+  .controles label { font-size:13px; color:var(--suave); }
+  input, select { font:inherit; padding:6px 10px; border:1px solid var(--linea); border-radius:6px;
+                  background:var(--panel); color:var(--tinta); }
+  input[type=search] { min-width:240px; }
+  .rapido button { font:inherit; font-size:13px; padding:5px 10px; border-radius:6px; cursor:pointer;
+                   border:1px solid var(--linea); background:var(--panel); color:var(--suave); }
+  .rapido button.on { border-color:var(--acento); color:var(--acento); font-weight:600; }
+  .nota { color:var(--tenue); font-size:13px; margin:-6px 0 18px; }
+
+  .cifras { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:22px; }
+  .cifra { background:var(--panel); border:1px solid var(--linea); border-radius:8px; padding:14px 16px; }
+  .cifra .n { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .cifra .t { font-size:12px; color:var(--tenue); text-transform:uppercase; letter-spacing:.07em; }
+  .sube { color:var(--sube); } .baja { color:var(--baja); }
+
+  .scroll { overflow-x:auto; background:var(--panel); border:1px solid var(--linea); border-radius:8px; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:8px 12px; border-bottom:1px solid #eef2f4; font-size:14px; }
+  th { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--tenue);
+       background:#f8fafb; white-space:nowrap; }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tbody tr.art { cursor:pointer; } tbody tr.art:hover td { background:#f8fafb; }
+  tr.det td { background:#fbfcfd; padding:4px 12px 14px 32px; }
+  tr.det table th { background:transparent; }
+  .etq { font-size:11px; font-weight:600; padding:1px 6px; border-radius:99px; background:#f9ede4;
+         color:var(--aviso); margin-left:6px; white-space:nowrap; }
+  .vacio { padding:28px; text-align:center; color:var(--tenue); }
+  @media (max-width:640px) { nav { margin-left:0; } .col-fam { display:none; } }
+</style>
+</head>
+<body>
+<div class="caja">
+  <header>
+    <h1>Evolución del coste</h1>
+    <nav>
+      <a href="/">Buscador</a><a href="/catalogo">Catálogo</a><a href="/piezas">Piezas</a>
+      <a href="/costes">Costes</a><a href="/configuracion">Configuración</a>
+    </nav>
+  </header>
+
+  <div class="controles">
+    <label for="desde">Comparar con el</label>
+    <input type="date" id="desde">
+    <span class="rapido" id="rapido">
+      <button data-dias="7">7 días</button><button data-dias="30">30 días</button>
+      <button data-dias="90">90 días</button><button data-dias="365">1 año</button>
+    </span>
+  </div>
+  <div class="nota" id="nota"></div>
+
+  <div class="cifras" id="cifras"></div>
+
+  <div class="controles">
+    <input type="search" id="buscar" placeholder="Buscar artículo o familia…">
+    <select id="orden">
+      <option value="impacto">Ordenar por impacto anual</option>
+      <option value="pct">Ordenar por % de cambio</option>
+      <option value="dif">Ordenar por € por unidad</option>
+    </select>
+    <label><input type="checkbox" id="soloCambios" checked> Solo los que cambian</label>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th>Artículo</th><th>Descripción</th><th class="col-fam">Familia</th>
+        <th class="n">Antes</th><th class="n">Ahora</th><th class="n">Diferencia</th>
+        <th class="n">%</th><th class="n">Vendidas 12m</th><th class="n">Impacto anual</th>
+      </tr></thead>
+      <tbody id="lista"><tr><td colspan="9" class="vacio">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const eur = (v, d = 2) => v == null ? '—' : v.toLocaleString('es-ES', {minimumFractionDigits: d, maximumFractionDigits: d});
+// useGrouping 'always': en es-ES los numeros de 4 cifras salen sin punto (6177)
+const ent = v => v == null ? '—' : Math.round(v).toLocaleString('es-ES', {useGrouping: 'always'});
+const signo = v => v > 0 ? '+' : '';
+const clase = v => v > 0.00005 ? 'sube' : v < -0.00005 ? 'baja' : '';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// fecha local (toISOString daria la de UTC, un dia menos pasada la medianoche)
+const iso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+let filas = [];
+
+function hace(dias) { const d = new Date(); d.setDate(d.getDate() - dias); return iso(d); }
+
+async function cargar() {
+  const desde = $('#desde').value;
+  for (const b of document.querySelectorAll('#rapido button'))
+    b.classList.toggle('on', hace(+b.dataset.dias) === desde);
+  const r = await (await fetch('/evolucion/datos?desde=' + desde)).json();
+  filas = r.filas;
+  if (!r.primero) {
+    $('#nota').textContent = 'Todavía no hay histórico: empieza a guardarse con la próxima pasada.';
+  } else if (r.primero.slice(0, 10) > desde) {
+    $('#nota').textContent = 'El histórico empieza el ' + new Date(r.primero).toLocaleDateString('es-ES')
+      + ': cada artículo se compara con su primer cálculo.';
+  } else { $('#nota').textContent = ''; }
+  pintar();
+}
+
+function pintar() {
+  const q = $('#buscar').value.trim().toLowerCase();
+  const solo = $('#soloCambios').checked;
+  const ord = $('#orden').value;
+  const sube = filas.filter(f => f.dif > 0.00005), baja = filas.filter(f => f.dif < -0.00005);
+  const impacto = filas.reduce((s, f) => s + (f.impacto_anual || 0), 0);
+  $('#cifras').innerHTML = [
+    ['Suben', sube.length, 'sube'], ['Bajan', baja.length, 'baja'],
+    ['Sin cambios', filas.length - sube.length - baja.length, ''],
+    ['Impacto anual', signo(impacto) + ent(impacto) + ' €', clase(impacto)],
+  ].map(([t, n, c]) => `<div class="cifra"><div class="n ${c}">${n}</div><div class="t">${t}</div></div>`).join('');
+
+  const clave = {impacto: f => Math.abs(f.impacto_anual || 0), pct: f => Math.abs(f.pct || 0),
+                 dif: f => Math.abs(f.dif || 0)}[ord];
+  const vis = filas
+    .filter(f => !solo || Math.abs(f.dif || 0) > 0.00005)
+    .filter(f => !q || (f.id + ' ' + f.desc + ' ' + f.familia).toLowerCase().includes(q))
+    .sort((a, b) => clave(b) - clave(a));
+  $('#lista').innerHTML = vis.length ? vis.map(f => `
+    <tr class="art" data-id="${esc(f.id)}">
+      <td><a href="/?codigo=${encodeURIComponent(f.id)}&desc=${encodeURIComponent(f.desc || '')}">${esc(f.id)}</a></td>
+      <td>${esc(f.desc)}${f.completo ? '' : '<span class="etq">coste incompleto</span>'}</td>
+      <td class="col-fam">${esc(f.familia)}</td>
+      <td class="n">${eur(f.antes, 4)}</td><td class="n">${eur(f.ahora, 4)}</td>
+      <td class="n ${clase(f.dif)}">${f.dif == null ? '—' : signo(f.dif) + eur(f.dif, 4)}</td>
+      <td class="n ${clase(f.dif)}">${f.pct == null ? '—' : signo(f.pct) + eur(f.pct, 1) + ' %'}</td>
+      <td class="n">${ent(f.uds_12m)}</td>
+      <td class="n ${clase(f.impacto_anual)}">${f.impacto_anual == null ? '—' : signo(f.impacto_anual) + ent(f.impacto_anual) + ' €'}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="9" class="vacio">${filas.length ? 'Ningún artículo con esos filtros.' : 'Sin datos todavía.'}</td></tr>`;
+}
+
+// al pulsar un articulo: que piezas explican el cambio
+$('#lista').addEventListener('click', async ev => {
+  const tr = ev.target.closest('tr.art'); if (!tr) return;
+  if (tr.nextElementSibling && tr.nextElementSibling.classList.contains('det')) {
+    tr.nextElementSibling.remove(); return;
+  }
+  const det = document.createElement('tr'); det.className = 'det';
+  det.innerHTML = '<td colspan="9">Cargando…</td>'; tr.after(det);
+  const r = await (await fetch('/evolucion/' + encodeURIComponent(tr.dataset.id) + '?desde=' + $('#desde').value)).json();
+  det.innerHTML = '<td colspan="9">' + (r.piezas.length ? `<table>
+    <thead><tr><th>Pieza</th><th>Descripción</th><th class="n">Antes</th><th class="n">Ahora</th>
+      <th class="n">Diferencia</th><th>Por qué</th></tr></thead><tbody>` +
+    r.piezas.map(p => `<tr><td>${esc(p.pieza)}</td><td>${esc(p.desc)}</td>
+      <td class="n">${eur(p.antes, 4)}</td><td class="n">${eur(p.ahora, 4)}</td>
+      <td class="n ${clase(p.dif)}">${signo(p.dif) + eur(p.dif, 4)}</td><td>${esc(p.motivo)}</td></tr>`).join('')
+    + '</tbody></table>' : 'Ninguna pieza ha cambiado.') + '</td>';
+});
+
+$('#desde').value = hace(30);
+$('#desde').addEventListener('change', cargar);
+for (const b of document.querySelectorAll('#rapido button'))
+  b.addEventListener('click', () => { $('#desde').value = hace(+b.dataset.dias); cargar(); });
+for (const id of ['#buscar', '#orden', '#soloCambios']) $(id).addEventListener('input', pintar);
+cargar();
+</script>
+</body>
+</html>

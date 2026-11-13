@@ -33,7 +33,7 @@
         <input id="archivo" type="file" name="archivo" accept=".xlsx" required>
       </div>
       <button id="btn" type="submit">Calcular costes</button>
-      <div id="status">Calculando… (puede tardar según el nº de artículos)</div>
+      <div id="status"></div>
     </form>
 
     <div class="hint">
@@ -44,19 +44,51 @@
         <li>Se genera <b>costes_lote.xlsx</b> con dos hojas:
           <b>Costes</b> (coste total por artículo, con una columna <b>Completo</b> Sí/No) y
           <b>Faltantes</b> (componentes sin tipo de aprovisionamiento o sin precio).</li>
+        <li>Los artículos del <b>catálogo</b> salen del último cálculo publicado (la columna
+            <b>Calculado</b> dice de cuándo es); el resto se calcula al momento contra el ERP.</li>
+        <li>Como mucho <b>{{ maximo }}</b> artículos por Excel.</li>
       </ul>
     </div>
   </div>
 
 <script>
-  // deja que el navegador descargue el fichero; solo mostramos "calculando"
+  // El calculo va en segundo plano: se sube el Excel, se pregunta el avance
+  // cada segundo y al terminar se descarga. Antes el formulario esperaba a la
+  // respuesta y el aviso de "calculando" se apagaba a los 4 s.
   const form = document.getElementById('form');
-  form.addEventListener('submit', () => {
-    document.getElementById('btn').disabled = true;
-    document.getElementById('status').style.display = 'block';
-    // reactiva el botón por si el usuario vuelve
-    setTimeout(() => { document.getElementById('btn').disabled = false;
-      document.getElementById('status').style.display = 'none'; }, 4000);
+  const btn = document.getElementById('btn');
+  const status = document.getElementById('status');
+  const decir = (txt, error) => {
+    status.textContent = txt;
+    status.style.color = error ? '#b91c1c' : '#2563eb';
+    status.style.display = 'block';
+  };
+
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    btn.disabled = true;
+    decir('Subiendo el Excel…');
+    try {
+      const r = await fetch('/lote', { method: 'POST', body: new FormData(form) });
+      if (!r.ok) throw new Error(await r.text());
+      const lote = await r.json();
+      const aviso = lote.recortados
+        ? ' (solo los ' + lote.total + ' primeros: el Excel trae ' + lote.recortados + ' más)' : '';
+      while (true) {
+        await new Promise(ok => setTimeout(ok, 1000));
+        const e = await (await fetch('/lote/' + lote.id + '/estado')).json();
+        if (e.error) throw new Error(e.error);
+        if (e.listo) break;
+        const cat = e.del_catalogo ? ' · ' + e.del_catalogo + ' ya calculados en el catálogo' : '';
+        decir('Calculando ' + e.hechos + ' de ' + e.total + aviso + cat + '…');
+      }
+      decir('Listo: ' + lote.total + ' artículos' + aviso + '. Descargando costes_lote.xlsx…');
+      window.location = '/lote/' + lote.id + '/excel';
+    } catch (err) {
+      decir('No se pudo calcular: ' + err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
   });
 </script>
 </body>

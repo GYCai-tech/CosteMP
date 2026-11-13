@@ -39,6 +39,16 @@ COMMENT ON TABLE core.dim_coste_escandallo IS
 COMMENT ON COLUMN core.dim_coste_escandallo.piezas_sin_tiempo IS
   'Informativo: NO tumba completo. El material si esta costeado.';
 
+-- Se anadieron a mano en produccion y no estaban en ningun fichero: un
+-- despliegue limpio creaba la tabla sin ellas y la primera pasada fallaba en
+-- el INSERT (exportar_costes.publicar las escribe). Mismos tipos que en
+-- produccion (comprobado el 26/10/2026). Van aqui y no despues porque
+-- 04_articulos.sql ya las usa.
+ALTER TABLE core.dim_coste_escandallo
+    ADD COLUMN IF NOT EXISTS familia           text,
+    ADD COLUMN IF NOT EXISTS piezas_sin_tipo   integer DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS piezas_sin_precio integer DEFAULT 0;
+
 -- Detalle: que pieza concreta bloquea a que articulo, y por que.
 CREATE TABLE IF NOT EXISTS core.fact_coste_hueco (
     idarticulo    varchar(20) NOT NULL,
