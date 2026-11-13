@@ -14,9 +14,12 @@ sql/06_parametros_coste.sql) y no en el .env a proposito: asi los leen igual la
 web y la pasada del vigilante, que son dos contenedores, y cambiarlos no pide
 reiniciar nada.
 
-La aplicacion no tiene usuarios. Si el .env define CONFIG_CLAVE, guardar pide
-esa clave; si no, cualquiera que abra la pagina puede cambiar los valores. Cada
-cambio queda en core.log_coste_parametro con el equipo desde el que se hizo.
+La aplicacion no tiene usuarios, asi que guardar pide la clave CONFIG_CLAVE del
+.env. Sin ella definida no se puede guardar nada: la pagina ensena los valores
+y avisa de que falta. Es a proposito que falle cerrado: si alguien anade un
+parametro editable y en el servidor nadie definio la clave, el parametro no
+queda abierto a cualquiera que abra la pagina. Cada cambio queda en
+core.log_coste_parametro con el equipo desde el que se hizo.
 """
 import hmac
 import os
@@ -55,7 +58,15 @@ def _editables():
 
 
 def _clave_config():
-    return os.getenv("CONFIG_CLAVE") or None
+    """La clave para guardar, o None si no esta definida (o es solo espacios,
+    que es como queda un CONFIG_CLAVE= con un espacio detras)."""
+    return (os.getenv("CONFIG_CLAVE") or "").strip() or None
+
+
+def _clave_correcta(dada, secreto):
+    # en bytes: compare_digest con str solo admite ASCII y una clave con una
+    # n o una tilde tiraria la peticion con un 500 en vez de decir que no
+    return hmac.compare_digest(str(dada or "").encode("utf-8"), secreto.encode("utf-8"))
 
 
 def leer_config():
@@ -130,9 +141,12 @@ def pagina():
     grupos = {}
     for clave, p in PARAMETROS.items():
         grupos.setdefault(p["grupo"], []).append(dict(p, clave=clave))
+    editables = bool(_editables())
+    con_clave = _clave_config() is not None
     return render_template("configuracion.html", grupos=grupos, cfg=leer_config(),
-                           hay_editables=bool(_editables()),
-                           pide_clave=_clave_config() is not None and bool(_editables()))
+                           hay_editables=editables,
+                           pide_clave=editables and con_clave,
+                           sin_clave=editables and not con_clave)
 
 
 @bp.route("/configuracion/<clave>", methods=["POST"])
@@ -142,9 +156,12 @@ def cambiar(clave):
         return jsonify(error="Ese parámetro no existe"), 404
     if "erp" in p:
         return jsonify(error="Este valor se cambia en el ERP: " + p["erp"]["donde"]), 409
-    datos = request.get_json(silent=True) or {}
     secreto = _clave_config()
-    if secreto and not hmac.compare_digest(str(datos.get("clave", "")), secreto):
+    if secreto is None:
+        return jsonify(error="No se puede guardar: falta CONFIG_CLAVE en el .env "
+                             "del servidor"), 403
+    datos = request.get_json(silent=True) or {}
+    if not _clave_correcta(datos.get("clave"), secreto):
         return jsonify(error="La clave no es correcta"), 403
 
     # se acepta la coma decimal, que es como lo va a escribir todo el mundo

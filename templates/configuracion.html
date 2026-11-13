@@ -93,6 +93,12 @@
       por defecto.</div>
   {% endif %}
 
+  {% if sin_clave %}
+    <div class="error">No se puede guardar ningún cambio: falta definir
+      <code>CONFIG_CLAVE</code> en el <code>.env</code> del servidor. Mientras
+      tanto los valores solo se pueden consultar.</div>
+  {% endif %}
+
   {% if pide_clave %}
     <div class="clave">
       <label for="clave">Clave para guardar</label>
@@ -137,7 +143,7 @@
         <div class="control">
           <div class="campo">
             <input id="in-{{ p.clave }}" inputmode="decimal" autocomplete="off"
-                   value="{{ ('%g' % v.valor) | replace('.', ',') }}">
+                   value="{{ ('%g' % v.valor) | replace('.', ',') }}"{% if sin_clave %} disabled{% endif %}>
             <span class="u">{{ p.unidad }}</span>
           </div>
           <button type="submit" disabled>Guardar</button>

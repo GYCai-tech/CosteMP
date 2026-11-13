@@ -214,11 +214,15 @@ def test_un_lote_que_no_existe_da_404(lote):
 
 # --- la pagina /configuracion -------------------------------------------------
 
+CLAVE = "secreta"
+
+
 @pytest.fixture
 def config(monkeypatch):
     """/configuracion con el ERP sustituido (17 EUR/h), sin Postgres, y con un
     parametro editable de prueba, porque hoy los de verdad vienen todos del ERP.
-    Se apunta lo que se guardaria."""
+    CONFIG_CLAVE vale CLAVE, como en un servidor bien configurado. Se apunta lo
+    que se guardaria."""
     import web_config
     guardados, aplicados = [], []
     _erp_con(monkeypatch, 17)
@@ -236,7 +240,7 @@ def config(monkeypatch):
         web_config.PARAMETROS[clave]["al_cambiar"]()
         return 10.0
     monkeypatch.setattr(web_config, "guardar_parametro", guardar)
-    monkeypatch.delenv("CONFIG_CLAVE", raising=False)
+    monkeypatch.setenv("CONFIG_CLAVE", CLAVE)
     return app_mod.app.test_client(), guardados, aplicados, monkeypatch
 
 
@@ -267,14 +271,15 @@ def test_la_pagina_avisa_si_el_erp_no_da_la_hora(config, monkeypatch):
 
 def test_la_hora_del_erp_no_se_puede_guardar_aqui(config):
     cliente, guardados, _, _ = config
-    r = cliente.post("/configuracion/coste_hora_operario", json={"valor": "18"})
+    r = cliente.post("/configuracion/coste_hora_operario",
+                     json={"valor": "18", "clave": CLAVE})
     assert r.status_code == 409 and "ERP" in r.get_json()["error"]
     assert guardados == []
 
 
 def test_se_guarda_con_coma_decimal_y_la_web_lo_aplica_ya(config):
     cliente, guardados, aplicados, _ = config
-    r = cliente.post("/configuracion/prueba", json={"valor": "18,5"})
+    r = cliente.post("/configuracion/prueba", json={"valor": "18,5", "clave": CLAVE})
     assert r.status_code == 200 and r.get_json()["valor"] == 18.5
     assert guardados == [("prueba", 18.5)] and aplicados == [1]
 
@@ -282,22 +287,60 @@ def test_se_guarda_con_coma_decimal_y_la_web_lo_aplica_ya(config):
 @pytest.mark.parametrize("valor", ["", "abc", "0", "-3", "250"])
 def test_no_se_guarda_un_valor_imposible(config, valor):
     cliente, guardados, _, _ = config
-    r = cliente.post("/configuracion/prueba", json={"valor": valor})
+    r = cliente.post("/configuracion/prueba", json={"valor": valor, "clave": CLAVE})
     assert r.status_code == 400 and guardados == []
 
 
 def test_un_parametro_que_no_existe_da_404(config):
     cliente, guardados, _, _ = config
-    assert cliente.post("/configuracion/inventado", json={"valor": "1"}).status_code == 404
+    assert cliente.post("/configuracion/inventado",
+                        json={"valor": "1", "clave": CLAVE}).status_code == 404
     assert guardados == []
 
 
-def test_con_clave_en_el_env_hay_que_darla(config):
-    cliente, guardados, _, mp = config
-    mp.setenv("CONFIG_CLAVE", "secreta")
-    assert cliente.post("/configuracion/prueba",
-                        json={"valor": "18", "clave": "mala"}).status_code == 403
+@pytest.mark.parametrize("dada", [None, "", "mala", "secretá", " secreta"])
+def test_sin_la_clave_buena_no_se_guarda(config, dada):
+    cliente, guardados, _, _ = config
+    datos = {"valor": "18"} if dada is None else {"valor": "18", "clave": dada}
+    r = cliente.post("/configuracion/prueba", json=datos)
+    assert r.status_code == 403 and r.get_json()["error"] == "La clave no es correcta"
     assert guardados == []
+
+
+def test_con_la_clave_buena_se_guarda(config):
+    cliente, guardados, _, _ = config
     assert cliente.post("/configuracion/prueba",
-                        json={"valor": "18", "clave": "secreta"}).status_code == 200
+                        json={"valor": "18", "clave": CLAVE}).status_code == 200
     assert guardados == [("prueba", 18.0)]
+
+
+@pytest.mark.parametrize("en_env", [None, "", "   "])
+def test_sin_config_clave_en_el_servidor_no_se_guarda_nada(config, en_env):
+    """Falla cerrado: ni sin clave ni con cualquier clave."""
+    cliente, guardados, _, mp = config
+    if en_env is None:
+        mp.delenv("CONFIG_CLAVE", raising=False)
+    else:
+        mp.setenv("CONFIG_CLAVE", en_env)
+    for datos in ({"valor": "18"}, {"valor": "18", "clave": ""},
+                  {"valor": "18", "clave": en_env or ""}, {"valor": "18", "clave": CLAVE}):
+        r = cliente.post("/configuracion/prueba", json=datos)
+        assert r.status_code == 403 and "CONFIG_CLAVE" in r.get_json()["error"]
+    assert guardados == []
+
+
+def test_sin_config_clave_la_pagina_avisa_y_no_deja_editar(config):
+    cliente, _, _, mp = config
+    mp.delenv("CONFIG_CLAVE", raising=False)
+    html = cliente.get("/configuracion").get_data(as_text=True)
+    assert "falta definir" in html and 'id="clave"' not in html
+    assert 'id="in-prueba"' in html
+    campo = html[html.index('id="in-prueba"'):]
+    assert " disabled" in campo[:campo.index(">")]
+
+
+def test_con_config_clave_la_pagina_pide_la_clave(config):
+    html = config[0].get("/configuracion").get_data(as_text=True)
+    assert 'id="clave"' in html and "falta definir" not in html
+    campo = html[html.index('id="in-prueba"'):]
+    assert " disabled" not in campo[:campo.index(">")]

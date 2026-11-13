@@ -139,6 +139,7 @@ Para los comandos hay que entrar en el servidor (apartado 6).
 | El lote tarda mucho | Es normal con muchos artículos que no son del catálogo: cada uno se consulta en el ERP | Esperar; la página muestra el avance. El resultado se puede descargar durante 1 hora |
 | El lote ha costeado artículos que no eran | El Excel subido tenía la columna de códigos con otro nombre o había varias columnas | La aplicación busca una columna llamada «artículo», «código», «id» o «referencia»; si no la hay, usa la primera. Dejar los códigos en una columna con ese nombre, en la primera hoja visible |
 | `/configuracion` pide una clave que nadie sabe | Está definida en `CONFIG_CLAVE` del `.env` del servidor | Mirarla en el `.env` (6.4) |
+| `/configuracion` dice que falta `CONFIG_CLAVE` y no deja guardar | No está definida (o está vacía) en el `.env` del servidor | Definirla en el `.env` y reiniciar el contenedor de la web (6.4) |
 | El coste de todo el catálogo ha cambiado de golpe | Alguien ha cambiado el coste/hora de operario | `/configuracion` muestra el historial de cambios con fecha y equipo |
 | Aparece un artículo nuevo que no está en el catálogo | El catálogo es una lista fija en Postgres | Ver «Añadir o quitar artículos del catálogo» en la documentación técnica |
 

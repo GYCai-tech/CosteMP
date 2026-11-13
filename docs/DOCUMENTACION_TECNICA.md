@@ -70,7 +70,7 @@ una foto, sin lógica de cálculo. Si añades un paso, añádelo en el sitio com
 
 - Misma imagen Docker para los dos contenedores; solo cambia el `command`.
 - Cada proceso tiene su propia caché en memoria (`desglose._cache`, `_coste_hora`).
-- No hay usuarios ni autenticación. `/configuracion` puede pedir `CONFIG_CLAVE`.
+- No hay usuarios ni autenticación. Guardar en `/configuracion` pide `CONFIG_CLAVE`; sin ella definida no se puede guardar nada.
 
 ### Stack
 
@@ -119,7 +119,7 @@ Variables del `.env`:
 | `PG_HOST/DB/USER/PASS/PORT` | `gyc_analytics` (puerto 5434 en el servidor) |
 | `COSTES_SALIDA_XLSX` | Dónde escribir `datos_costes.xlsx`. En Docker lo fija el compose a `/datos/...` |
 | `COSTES_DATOS_DIR` | Carpeta del host que se monta en `/datos` (servidor: `/mnt/costes`; PC: vacío → `./salidas`) |
-| `CONFIG_CLAVE` | Clave para guardar en `/configuracion` (vacía = sin clave) |
+| `CONFIG_CLAVE` | Clave para guardar en `/configuracion` (vacía = no se puede guardar nada) |
 
 > Si `COSTES_SALIDA_XLSX` no está definida, `exportar_costes.py` escribe por defecto en
 > `C:\Users\santiago.arce\Desktop\costes\datos_costes.xlsx`. Defínela en tu `.env`.
@@ -340,7 +340,7 @@ del hook `pre-push`.
 | `v_coste_hoja10` | Contrato rígido con el libro de análisis (columnas, orden, tipo entero, solo material) |
 | Reparto materia prima / mercadería | Depende de `IdTipoAprovisionamiento`, un campo manual y poco relleno en el ERP |
 | `core.dim_coste_articulo` | Tabla antigua y muerta (última carga 2022). No usarla ni borrarla |
-| Sin autenticación | Cualquiera en la red puede lanzar recálculos; `/configuracion` solo protegida si hay `CONFIG_CLAVE` |
+| Sin autenticación | Cualquiera en la red puede lanzar recálculos; `/configuracion` no deja guardar sin `CONFIG_CLAVE` |
 | `.gitignore` ignora `*.pdf` | Excepto la carpeta `documentación/`, que sí se versiona |
 
 ## 12. Checklist de relevo
