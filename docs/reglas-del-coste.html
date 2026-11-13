@@ -73,7 +73,7 @@
   <p class="sub">Todas las condiciones que deciden qué se despieza, cómo se valora y por
      qué salta cada aviso. Lo que hace el código, no lo que debería hacer.</p>
   <p class="meta"><span><b>28 de agosto de 2026</b></span>
-     <span>desglose.py · app.py</span><span>Mano de obra 17 €/h</span></p>
+     <span>desglose.py</span><span>Mano de obra a la tarifa del ERP (hoy 17 €/h)</span></p>
 </div>
 
 <section>
@@ -88,7 +88,7 @@
     <tr><td class="m">2</td><td><b>Precio</b> — cuánto vale comprar cada artículo</td><td class="m">CTE precio</td></tr>
     <tr><td class="m">3</td><td><b>Valorable</b> — a quién se le aplica ese precio</td><td class="m">EsValorable</td></tr>
     <tr><td class="m">4</td><td><b>Coste de material</b> — cantidad × precio, sumado en cascada</td><td class="m">rollup()</td></tr>
-    <tr><td class="m">5</td><td><b>Tiempo y coste de operación</b> — minutos × 17 €/h</td><td class="m">rollup()</td></tr>
+    <tr><td class="m">5</td><td><b>Tiempo y coste de operación</b> — minutos × coste/hora del ERP (hoy 17 €/h)</td><td class="m">rollup()</td></tr>
     <tr><td class="m">6</td><td><b>Avisos</b> — qué falta y de quién es</td><td class="m">avisos_arbol()</td></tr>
   </table>
 </section>
@@ -359,7 +359,7 @@ AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
         <td class="m">Cant × (Precio − Precio × Descuento/100)</td>
         <td>Solo si la fila es valorable y tiene precio</td></tr>
     <tr><td><b>Coste de operación</b> de una línea</td>
-        <td class="m">min/pieza × Cant × 17/60</td><td>Solo nodos fabricados</td></tr>
+        <td class="m">min/pieza × Cant × coste_hora/60</td><td>Solo nodos fabricados</td></tr>
     <tr><td><b>Rollup</b> de un nodo</td>
         <td class="m">lo suyo + todo lo que cuelga</td>
         <td>Redondeo a <b>6 decimales</b>, no a 4</td></tr>
@@ -387,8 +387,12 @@ AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
   <h2><span class="n">09</span>Constantes y listas a mano</h2>
   <table>
     <tr><th style="width:24%">Qué</th><th style="width:22%">Valor</th><th>Por qué está a mano</th></tr>
-    <tr><td class="m">RATE_OP</td><td class="m">17 €/h → €/min</td>
-        <td>Tarifa única de operario, sin distinguir puesto ni turno</td></tr>
+    <tr><td class="m">coste_hora_operario</td><td class="m">el del ERP (hoy 17 €/h)</td>
+        <td>Tarifa única de operario, sin distinguir puesto ni turno. No está a mano:
+            sale del campo <span class="m">Coste</span> de la categoría 1 'Operario' en
+            <span class="m">Empleados_Categorias</span>, que es la de toda la mano de obra
+            de los escandallos. Se cambia en el ERP; <span class="m">/configuracion</span>
+            lo enseña. Si la fila no tiene coste o el ERP no responde se usan 17 €/h</td></tr>
     <tr><td class="m">NO_SUMA_PROPIA</td><td class="m">5 artículos</td>
         <td>El freno del 2 % no los separa de un lacado legítimo</td></tr>
     <tr><td class="m">IdProveedor = '0'</td><td class="m">excluido siempre</td>
@@ -399,8 +403,9 @@ AND NOT EXISTS (Trabajos_Fases con OrdenTrabajo = 1)</pre>
 </section>
 
 <footer>
-  <p>Las condiciones descritas se corresponden con <code>desglose.py</code> (componentes,
-     precio, valorable, tiempo) y <code>app.py</code> (rollup y clasificación de avisos).
+  <p>Las condiciones descritas se corresponden con <code>desglose.py</code>: componentes,
+     precio, valorable y tiempo (las consultas) y rollup y clasificación de avisos
+     (<code>construir_arbol()</code> y <code>avisos_arbol()</code>).
      Los ejemplos citados son casos reales que provocaron cada regla.</p>
   <p>Los datos del ERP cambian a lo largo del día: cualquier recuento es una foto, no un saldo.</p>
 </footer>

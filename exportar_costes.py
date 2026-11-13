@@ -1,6 +1,6 @@
 """Recalcula el coste de los articulos del catalogo y lo publica en gyc_analytics.
 
-NO calcula nada por su cuenta: reutiliza desglose.py y app.py, el mismo codigo
+NO calcula nada por su cuenta: reutiliza desglose.py, el mismo codigo
 que alimenta la web. Es a proposito. Una segunda implementacion del calculo
 acabaria divergiendo en silencio y nadie se enteraria hasta que un numero no
 cuadrase.
@@ -20,6 +20,8 @@ medias, y si el proceso falla el dato anterior queda intacto.
 """
 import argparse
 import datetime as dt
+import hashlib
+import json
 import os
 import pathlib
 import time
@@ -28,9 +30,8 @@ from sqlalchemy import text
 
 from db import get_engine
 from db_pg import get_pg_engine
-from desglose import (coste_propio, desglose, nombre_articulo, sin_operacion,
-                      tiempo_operacion)
-from app import avisos_arbol, construir_arbol
+from desglose import (avisos_arbol, construir_arbol, coste_propio, desglose,
+                      lineas_coste, nombre_articulo, sin_operacion, tiempo_operacion)
 
 SQL_DIR = pathlib.Path(__file__).with_name("sql")
 # respaldo por si la tabla de catalogo esta vacia (primer arranque)
@@ -140,7 +141,9 @@ def leer_catalogo(pg, limite=None):
 
 
 def calcular(cod, ahora):
-    """Una fila de coste + sus huecos. Mismo criterio que resumen_lote()."""
+    """Una fila de coste, sus huecos y su detalle por pieza. Mismo criterio que
+    resumen_lote(). El detalle es {"coste_hora": EUR/h usados, "lineas": [...]}
+    (ver desglose.lineas_coste)."""
     nombre = nombre_articulo(cod)
     df = desglose(cod)
     if df.empty:
@@ -149,7 +152,7 @@ def calcular(cod, ahora):
                     piezas_sin_escandallo=0, piezas_sin_tipo=0,
                     piezas_sin_precio=0, piezas_sin_tiempo=0, completo=False,
                     error="Sin despiece o articulo inexistente",
-                    fecha_calculo=ahora), []
+                    fecha_calculo=ahora), [], {"coste_hora": None, "lineas": []}
 
     t, es_medio = tiempo_operacion(cod)
     arbol = construir_arbol(df, cod, nombre, t, sin_operacion(cod),
@@ -183,7 +186,8 @@ def calcular(cod, ahora):
             huecos.append(dict(idarticulo=cod, idpieza=n["id"],
                                descripcion=n["nombre"], motivo=motivo,
                                fecha_calculo=ahora))
-    return fila, huecos
+    return fila, huecos, {"coste_hora": arbol["coste_hora"],
+                          "lineas": lineas_coste(arbol)}
 
 
 def enriquecer(huecos):
@@ -316,11 +320,86 @@ def enriquecer_tarifa(filas):
             f["tarifa_desde_uds"] = float(r[3]) if r[3] is not None else None
 
 
-def publicar(pg, filas, huecos, parcial=False):
+def _huella(lineas):
+    """md5 del detalle por pieza: lo que decide si hay que volver a guardarlo."""
+    clave = [(l["idpieza"], round(l["cantidad"], 6), round(l["coste_material"], 6),
+              round(l["tiempo_min"], 6), round(l["coste_operacion"], 6)) for l in lineas]
+    return hashlib.md5(json.dumps(clave).encode()).hexdigest()
+
+
+def _guardar_detalle(c, filas, detalles, parcial):
+    """El detalle vigente por pieza y el historico (sql/07_detalle_coste.sql).
+
+    Va en un SAVEPOINT dentro de la transaccion de publicar(): si falla (la
+    tabla no se puede crear, un permiso...) se deshace solo esto y el coste se
+    publica igual que antes. Es informacion anadida; no puede tumbar la pasada.
+    """
+    ids = [f["idarticulo"] for f in filas]
+    try:
+        with c.begin_nested():
+            c.execute(text((SQL_DIR / "07_detalle_coste.sql").read_text(encoding="utf-8")))
+            if parcial:
+                c.execute(text("DELETE FROM core.fact_coste_linea "
+                               "WHERE idarticulo = ANY(CAST(:ids AS varchar[]))"), {"ids": ids})
+            else:
+                c.execute(text("TRUNCATE core.fact_coste_linea"))
+
+            # la ultima huella guardada de cada articulo, ANTES de anadir la de hoy
+            previas = dict(c.execute(text(
+                "SELECT DISTINCT ON (idarticulo) idarticulo, huella "
+                "FROM core.hist_coste_articulo "
+                "WHERE idarticulo = ANY(CAST(:ids AS varchar[])) "
+                "ORDER BY idarticulo, fecha_calculo DESC"), {"ids": ids}).all())
+
+            vigentes, hist, hist_lineas = [], [], []
+            for f in filas:
+                d = detalles.get(f["idarticulo"]) or {"coste_hora": None, "lineas": []}
+                base = {"idarticulo": f["idarticulo"], "fecha_calculo": f["fecha_calculo"]}
+                vigentes.extend(dict(l, **base) for l in d["lineas"])
+                huella = _huella(d["lineas"]) if d["lineas"] else None
+                hist.append(dict(base, coste_material=f["coste_material"],
+                                 coste_operacion=f["coste_operacion"],
+                                 coste_total=f["coste_total"], completo=f["completo"],
+                                 coste_hora=d["coste_hora"], huella=huella))
+                if huella and huella != previas.get(f["idarticulo"]):
+                    hist_lineas.extend(dict(l, **base) for l in d["lineas"])
+
+            if vigentes:
+                c.execute(text("""
+                    INSERT INTO core.fact_coste_linea
+                      (idarticulo, idpieza, descripcion, tipo, unidad, cantidad, precio,
+                       fuente, coste_material, tiempo_min, coste_operacion, fecha_calculo)
+                    VALUES (:idarticulo, :idpieza, :descripcion, :tipo, :unidad, :cantidad,
+                            :precio, :fuente, :coste_material, :tiempo_min,
+                            :coste_operacion, :fecha_calculo)"""), vigentes)
+            if hist:
+                c.execute(text("""
+                    INSERT INTO core.hist_coste_articulo
+                      (idarticulo, fecha_calculo, coste_material, coste_operacion,
+                       coste_total, completo, coste_hora, huella)
+                    VALUES (:idarticulo, :fecha_calculo, :coste_material, :coste_operacion,
+                            :coste_total, :completo, :coste_hora, :huella)
+                    ON CONFLICT DO NOTHING"""), hist)
+            if hist_lineas:
+                c.execute(text("""
+                    INSERT INTO core.hist_coste_linea
+                      (idarticulo, fecha_calculo, idpieza, descripcion, cantidad, precio,
+                       coste_material, tiempo_min, coste_operacion)
+                    VALUES (:idarticulo, :fecha_calculo, :idpieza, :descripcion, :cantidad,
+                            :precio, :coste_material, :tiempo_min, :coste_operacion)
+                    ON CONFLICT DO NOTHING"""), hist_lineas)
+    except Exception as ex:                                   # noqa: BLE001
+        print(f"  aviso: no se guardo el detalle por pieza ni el historico: "
+              f"{str(ex)[:200]}", flush=True)
+
+
+def publicar(pg, filas, huecos, parcial=False, detalles=None):
     """Sustituye el contenido de las dos tablas en UNA transaccion.
 
     parcial=True cambia solo los articulos recalculados y deja intactos los
     demas. Es lo que permite el recalculo rapido sin perder la foto completa.
+    detalles: {idarticulo: detalle de calcular()} para el detalle por pieza y
+    el historico; sin el, se publica solo lo de siempre.
     """
     ids = [f["idarticulo"] for f in filas]
     with pg.begin() as c:
@@ -356,9 +435,11 @@ def publicar(pg, filas, huecos, parcial=False):
                         :tipo_aprovisionamiento, :familia, :tuvo_fase,
                         :veces_comprada, :tiene_tarifa)
                 ON CONFLICT DO NOTHING"""), huecos)
+        if detalles is not None:
+            _guardar_detalle(c, filas, detalles, parcial)
 
 
-def publicar_calculados(pg, filas, huecos, parcial):
+def publicar_calculados(pg, filas, huecos, parcial, detalles=None):
     """Completa lo calculado con lo que falta del ERP (familia, precio de la
     tarifa vigente, datos de cada hueco) y lo publica en Postgres.
 
@@ -370,7 +451,7 @@ def publicar_calculados(pg, filas, huecos, parcial):
     enriquecer_articulos(filas)
     enriquecer_tarifa(filas)
     enriquecer(huecos)
-    publicar(pg, filas, huecos, parcial=parcial)
+    publicar(pg, filas, huecos, parcial=parcial, detalles=detalles)
 
 
 def en_catalogo(pg, codigo):
@@ -388,8 +469,8 @@ def recalcular_articulo(pg, codigo):
     No escribe en core.log_coste_recalculo: ese log es el de las pasadas, y
     /costes ensena la ultima como "ultimo calculo" del catalogo entero.
     """
-    fila, huecos = calcular(codigo, dt.datetime.now())
-    publicar_calculados(pg, [fila], huecos, parcial=True)
+    fila, huecos, detalle = calcular(codigo, dt.datetime.now())
+    publicar_calculados(pg, [fila], huecos, parcial=True, detalles={codigo: detalle})
     exportar_fichero(pg)
     return fila
 
@@ -409,10 +490,10 @@ def ejecutar(pg, solo_pendientes=False, limite=None, origen="manual",
             {"i": inicio, "o": origen}).scalar()
 
     ids = leer_pendientes(pg) if solo_pendientes else leer_catalogo(pg, limite)
-    filas, huecos, errores = [], [], 0
+    filas, huecos, detalles, errores = [], [], {}, 0
     for i, cod in enumerate(ids, 1):
         try:
-            f, hs = calcular(cod, inicio)
+            f, hs, detalles[cod] = calcular(cod, inicio)
             filas.append(f)
             huecos.extend(hs)
             if f["error"]:
@@ -428,7 +509,7 @@ def ejecutar(pg, solo_pendientes=False, limite=None, origen="manual",
         if progreso:
             progreso(i, len(ids))
 
-    publicar_calculados(pg, filas, huecos, parcial=solo_pendientes)
+    publicar_calculados(pg, filas, huecos, parcial=solo_pendientes, detalles=detalles)
 
     fin = dt.datetime.now()
     dur = round((fin - inicio).total_seconds(), 1)

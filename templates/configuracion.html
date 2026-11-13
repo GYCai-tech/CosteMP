@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuración</title>
+<style>
+  :root {
+    --tinta:#1a1d21; --suave:#5b666d; --tenue:#8a959b;
+    --fondo:#f5f7f8; --panel:#fff; --linea:#dde4e8;
+    --acento:#2e5a78; --ok:#2f6b3c; --aviso:#a64b14; --mal:#9b2c2c;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--tinta);
+         font:15px/1.55 "Segoe UI",system-ui,sans-serif; }
+  .caja { max-width:860px; margin:0 auto; padding:32px 20px 64px; }
+  a { color:var(--acento); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 20px;
+           margin-bottom:28px; }
+  h1 { font-size:26px; margin:0; letter-spacing:-.02em; }
+  nav { margin-left:auto; display:flex; gap:16px; font-size:14px; }
+
+  .clave { display:flex; align-items:center; gap:10px; margin-bottom:24px;
+           font-size:14px; color:var(--suave); }
+
+  h2 { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.08em;
+       color:var(--tenue); margin:0 0 8px; }
+  .grupo { margin-bottom:28px; }
+  .tarjeta { background:var(--panel); border:1px solid var(--linea); border-radius:8px; }
+
+  .ajuste { display:grid; grid-template-columns:1fr auto; gap:6px 20px;
+            align-items:center; padding:14px 18px; border-bottom:1px solid #eef2f4; }
+  .ajuste:last-child { border-bottom:none; }
+  .ajuste .nombre { font-weight:600; }
+  .ajuste .meta { font-size:12.5px; color:var(--tenue); }
+  .ajuste .meta.defecto { color:var(--aviso); }
+  .control { display:flex; align-items:center; gap:8px; }
+  .campo { display:flex; align-items:center; border:1px solid var(--linea);
+           border-radius:6px; background:var(--panel); overflow:hidden; }
+  .campo:focus-within { border-color:var(--acento); }
+  .campo input { font:inherit; width:96px; padding:7px 10px; border:0; outline:0;
+                 text-align:right; font-variant-numeric:tabular-nums; background:transparent;
+                 color:var(--tinta); }
+  .campo .u { padding:0 10px 0 2px; color:var(--tenue); font-size:13.5px; }
+  .valor-erp { font-size:17px; font-weight:600; font-variant-numeric:tabular-nums;
+               white-space:nowrap; }
+  .valor-erp .u { font-size:13.5px; font-weight:400; color:var(--tenue); }
+  .estado { grid-column:1 / -1; font-size:13px; display:none; }
+  .estado.ok { color:var(--ok); display:block; } .estado.mal { color:var(--mal); display:block; }
+
+  input.clave-in { font:inherit; padding:6px 10px; border:1px solid var(--linea);
+                   border-radius:6px; width:200px; }
+  button { font:inherit; font-weight:600; padding:7px 14px; border-radius:6px;
+           border:1px solid var(--acento); background:var(--acento); color:#fff; cursor:pointer; }
+  button.sec { background:transparent; color:var(--acento); padding:2px 8px; font-size:13px; }
+  button:disabled { opacity:.35; cursor:default; }
+
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:9px 18px; border-bottom:1px solid #eef2f4; font-size:14px; }
+  th { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.07em;
+       color:var(--tenue); }
+  tr:last-child td { border-bottom:none; }
+  td.v { font-variant-numeric:tabular-nums; white-space:nowrap; }
+  td.t { color:var(--tenue); }
+  .vacio { padding:14px 18px; color:var(--tenue); font-size:14px; }
+  .error { color:var(--mal); font-size:14px; margin-bottom:20px; }
+
+  @media (max-width:560px) {
+    nav { margin-left:0; }
+    .ajuste { grid-template-columns:1fr; }
+    th:nth-child(4), td:nth-child(4) { display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="caja">
+
+  <header>
+    <h1>Configuración</h1>
+    <nav>
+      <a href="/">Buscador</a>
+      <a href="/costes">Costes</a>
+      <a href="/catalogo">Catálogo</a>
+      <a href="/evolucion">Evolución</a>
+      <a href="/piezas">Piezas</a>
+    </nav>
+  </header>
+
+  {% if cfg.error and hay_editables %}
+    <div class="error">No se ha podido leer la configuración: se muestran los valores
+      por defecto.</div>
+  {% endif %}
+
+  {% if pide_clave %}
+    <div class="clave">
+      <label for="clave">Clave para guardar</label>
+      <input class="clave-in" id="clave" type="password" autocomplete="off">
+    </div>
+  {% endif %}
+
+  {% for grupo, params in grupos.items() %}
+  <section class="grupo">
+    <h2>{{ grupo }}</h2>
+    <div class="tarjeta">
+      {% for p in params %}
+      {% set v = cfg.valores[p.clave] %}
+      {% if p.erp %}
+      <div class="ajuste">
+        <div>
+          <div class="nombre">{{ p.nombre }}</div>
+          {% if v.error_erp %}
+            <div class="meta defecto">{{ v.error_erp }}. Se usa el valor por defecto.</div>
+          {% else %}
+            <div class="meta">Del ERP{% if v.categoria %} (categoría {{ v.categoria }}){% endif %}{% if v.fecha_cambio %}
+              · cambiado el {{ v.fecha_cambio.strftime('%d/%m/%Y') }}{% if v.usuario %} por el usuario {{ v.usuario }}{% endif %}{% endif %}</div>
+          {% endif %}
+          <div class="meta">Se cambia en el ERP: {{ p.erp.donde }}. Aquí se aplica al
+            abrir esta página o en 10 minutos; en el catálogo, en la siguiente pasada
+            o al pulsar Recalcular en <a href="/costes">Costes</a>.</div>
+        </div>
+        <div class="valor-erp">{{ ('%g' % v.valor) | replace('.', ',') }}
+          <span class="u">{{ p.unidad }}</span></div>
+      </div>
+      {% else %}
+      <form class="ajuste" data-clave="{{ p.clave }}" data-valor="{{ v.valor }}"
+            data-min="{{ p.min }}" data-max="{{ p.max }}" data-unidad="{{ p.unidad }}">
+        <div>
+          <div class="nombre"><label for="in-{{ p.clave }}">{{ p.nombre }}</label></div>
+          {% if v.por_defecto %}
+            <div class="meta defecto">Valor por defecto</div>
+          {% else %}
+            <div class="meta">Cambiado el {{ v.fecha_cambio.strftime('%d/%m/%Y') }}</div>
+          {% endif %}
+        </div>
+        <div class="control">
+          <div class="campo">
+            <input id="in-{{ p.clave }}" inputmode="decimal" autocomplete="off"
+                   value="{{ ('%g' % v.valor) | replace('.', ',') }}">
+            <span class="u">{{ p.unidad }}</span>
+          </div>
+          <button type="submit" disabled>Guardar</button>
+        </div>
+        <div class="estado"></div>
+      </form>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if hay_editables or cfg.historial %}
+  <section class="grupo">
+    <h2>Historial</h2>
+    <div class="tarjeta">
+      {% if cfg.historial %}
+      <table>
+        <thead><tr><th>Fecha</th><th>Parámetro</th><th>Cambio</th><th>Desde</th></tr></thead>
+        <tbody>
+        {% for h in cfg.historial %}
+          <tr>
+            <td class="v">{{ h.fecha.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td>{{ h.nombre }}</td>
+            <td class="v">{{ (('%g' % h.anterior) | replace('.', ',')) if h.anterior is not none else '—' }}
+              → {{ ('%g' % h.nuevo) | replace('.', ',') }} {{ h.unidad }}</td>
+            <td class="t">{{ h.desde or '' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="vacio">Sin cambios.</div>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+</div>
+
+<script>
+const num = v => v.toLocaleString('es-ES', {maximumFractionDigits: 4});
+const leer = s => parseFloat(String(s).trim().replace(',', '.'));
+
+for (const f of document.querySelectorAll('form.ajuste')) {
+  const input = f.querySelector('input');
+  const boton = f.querySelector('button');
+  const estado = f.querySelector('.estado');
+  const pintar = (html, ok) => { estado.innerHTML = html; estado.className = 'estado ' + (ok ? 'ok' : 'mal'); };
+  let vigente = +f.dataset.valor;
+  const min = +f.dataset.min, max = +f.dataset.max, unidad = f.dataset.unidad;
+
+  // el boton solo se activa si hay algo distinto que guardar
+  input.addEventListener('input', () => {
+    boton.disabled = !(leer(input.value) !== vigente && input.value.trim());
+    estado.className = 'estado';
+  });
+
+  f.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const valor = leer(input.value);
+    if (!(valor >= min && valor <= max)) {
+      pintar('Tiene que estar entre ' + num(min) + ' y ' + num(max) + ' ' + unidad, false); return;
+    }
+    // un cambio grande suele ser un error al teclear: se pide confirmarlo
+    const salto = Math.abs(valor - vigente) / vigente;
+    if (salto > 0.25 && !confirm('Pasar de ' + num(vigente) + ' a ' + num(valor) + ' ' + unidad +
+        ' es un cambio del ' + Math.round(salto * 100) + ' %. ¿Seguro?')) return;
+
+    boton.disabled = true;
+    const clave = document.getElementById('clave');
+    try {
+      const r = await fetch('/configuracion/' + f.dataset.clave, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({valor: input.value, clave: clave ? clave.value : ''})});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Error ' + r.status);
+      vigente = d.valor;
+      input.value = num(d.valor);
+      f.querySelector('.meta').textContent = 'Cambiado hoy';
+      f.querySelector('.meta').className = 'meta';
+      pintar('Guardado. <button type="button" class="sec">Recalcular catálogo</button>', true);
+      estado.querySelector('button').addEventListener('click', recalcular);
+    } catch (err) {
+      pintar(err.message, false);
+      boton.disabled = false;
+    }
+  });
+}
+
+// el catalogo publicado se recalcula en /costes, que es donde se ve el avance
+async function recalcular(ev) {
+  ev.target.disabled = true;
+  const r = await fetch('/costes/recalcular?modo=completo', {method: 'POST'});
+  if (r.ok || r.status === 409) { location.href = '/costes'; return; }
+  ev.target.disabled = false;
+}
+</script>
+</body>
+</html>

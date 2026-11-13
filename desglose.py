@@ -566,8 +566,10 @@ def _recordado(que, codigo, leer):
 
 def olvidar_cache():
     """Vacia lo recordado (para los tests y por si hiciera falta forzarlo)."""
+    global _coste_hora
     with _cache_lock:
         _cache.clear()
+    _coste_hora = None
 
 
 def olvidar_articulo(codigo):
@@ -883,7 +885,79 @@ def articulos_comprados(df: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("Coste", ascending=False, na_position="last")
 
 
-RATE_OP = 17.0 / 60.0   # 17 EUR/h operario -> EUR/min
+# ---------------------------------------------------------------------------
+# Coste de la hora de operario. Sale del ERP: el campo Coste de la categoria
+# 'Operario' en Empleados_Categorias (Empleados > Categorias). Quien lo cambie
+# alli lo cambia aqui; no hay una copia que mantener a mano.
+#
+# Es la categoria de toda la mano de obra de los escandallos (Trabajos_ManoObra:
+# 164 de 165 filas en la 1, la otra en la 0 'Generica', que vale 0), y los
+# tiempos de bonos no llevan categoria, asi que una sola tarifa basta.
+#
+# Se recuerda CACHE_TTL_S, tambien el fallo, para no preguntar en cada articulo
+# de una pasada: un cambio en el ERP llega a la web en 10 minutos como mucho
+# (al momento si se abre /configuracion, que lo vuelve a leer) y al catalogo
+# publicado en la siguiente pasada o al pulsar Recalcular en /costes.
+#
+# Si la fila no tiene coste (o es 0) o el ERP no responde se usa
+# COSTE_HORA_DEFECTO, que es el valor de siempre; /configuracion lo avisa.
+# ---------------------------------------------------------------------------
+COSTE_HORA_DEFECTO = 17.0
+ID_CATEGORIA_OPERARIO = 1
+
+SQL_COSTE_HORA = """
+SELECT Coste, Descrip, Usuario, FechaInsertUpdate
+FROM dbo.Empleados_Categorias
+WHERE IdCategoria = :cat
+"""
+
+_coste_hora = None       # (instante, dict de coste_hora_erp())
+
+
+def coste_hora_erp() -> dict:
+    """El coste/hora de operario y de donde sale.
+
+    {"valor": EUR/h, "categoria": 'Operario', "usuario"/"fecha": ultimo cambio
+    en el ERP, "error": None o por que se usa el valor por defecto}"""
+    global _coste_hora
+    ahora = time.monotonic()
+    if _coste_hora and ahora - _coste_hora[0] < CACHE_TTL_S:
+        return _coste_hora[1]
+    info = {"valor": COSTE_HORA_DEFECTO, "categoria": None, "usuario": None,
+            "fecha": None, "error": None}
+    try:
+        with get_engine().connect() as cn:
+            fila = cn.execute(text(SQL_COSTE_HORA),
+                              {"cat": ID_CATEGORIA_OPERARIO}).first()
+        if fila is None:
+            info["error"] = (f"No existe la categoría {ID_CATEGORIA_OPERARIO} "
+                             f"en Empleados_Categorias")
+        else:
+            info.update(categoria=(fila[1] or "").strip() or None,
+                        usuario=fila[2], fecha=fila[3])
+            if fila[0] is None or float(fila[0]) <= 0:
+                info["error"] = (f"La categoría {info['categoria'] or ID_CATEGORIA_OPERARIO} "
+                                 f"no tiene coste en el ERP")
+            else:
+                info["valor"] = float(fila[0])
+    except Exception as ex:                                   # noqa: BLE001
+        info["error"] = "No se pudo leer del ERP: " + str(ex)[:200]
+    if info["error"]:
+        print(f"  aviso: {info['error']}; se usa {COSTE_HORA_DEFECTO} EUR/h", flush=True)
+    _coste_hora = (ahora, info)
+    return info
+
+
+def coste_hora_operario() -> float:
+    """EUR por hora de operario con los que se valora el tiempo de operacion."""
+    return coste_hora_erp()["valor"]
+
+
+def olvidar_coste_hora():
+    """Olvida el coste/hora recordado: lo usa /configuracion para que un cambio
+    recien hecho en el ERP se aplique ya y no a los 10 minutos."""
+    global _coste_hora
+    _coste_hora = None
 
 
 def _num(v):
@@ -899,13 +973,21 @@ def _s(v):
 def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
                     servicio_raiz=None, medio_raiz=0, externo_raiz=0,
                     con_orden_raiz=0, anulado_raiz=0):
-    """Arbol del escandallo con coste de MATERIAL (hojas) y de OPERACION (ramas
-    fabricadas = tiempo x 17 EUR/h) y el rollup material+operacion por nodo.
+    """Árbol del escandallo con coste de MATERIAL (hojas compradas) y de OPERACIÓN
+    (nodos fabricados = tiempo × coste/hora de operario), y el rollup
+    material+operación por nodo.
 
-    servicio_raiz: coste del trabajo externo del propio articulo buscado, que
-    se suma a sus materiales (ver SQL_SERVICIO_EXTERNO).
-    medio_raiz: 1 si el tiempo de la raiz sale de la media de bonos (fuente
-    preferente); 0 si sale del tiempo teorico de la mano de obra imputada."""
+    Es la UNICA implementacion del calculo: la usan la web, el lote, la pasada
+    del catalogo (exportar_costes.py) y el Excel de un articulo. Antes habia una
+    copia en app.py y ya se habian separado (la de aqui guardaba la fuente del
+    precio de la raiz y la de app.py no).
+
+    servicio_raiz: coste del trabajo externo del propio artículo buscado, que se
+    suma a sus materiales (ver SQL_SERVICIO_EXTERNO).
+    medio_raiz: 1 si el tiempo de la raíz sale de la media de bonos (fuente
+    preferente); 0 si sale del tiempo teórico de la mano de obra imputada."""
+    coste_hora = coste_hora_operario()
+    por_min = coste_hora / 60.0
     root = {"id": codigo, "nombre": nombre, "cant": 1.0, "unidad": None, "tipo": None,
             "precio": None, "fuente": None, "de_conjunto": 0, "sin_escandallo": 0,
             "sin_operacion": int(sin_op_raiz or 0), "servicio": servicio_raiz,
@@ -916,12 +998,15 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
             "con_orden": int(con_orden_raiz or 0),
             # anulado en el ERP (Articulos.Estado = 1): solo etiqueta
             "anulado": int(anulado_raiz or 0),
+            # con que EUR/h se ha valorado la operacion, para poder ensenarlo
+            "coste_hora": coste_hora,
             "coste": servicio_raiz or 0.0, "hijos": []}
     nodos = {f"|{codigo}|": root}
 
     for r in df.sort_values("Ruta").to_dict(orient="records"):
         ruta = r["Ruta"]
         segs = [s for s in ruta.split("|") if s]
+        # fila del propio articulo (compra directa): el root ES la hoja
         if segs == [codigo]:
             root["coste"] = _num(r["Coste"]) or 0.0
             root["cant"] = _num(r["Cant"]) or 1.0; root["unidad"] = _s(r["Unidad"])
@@ -947,43 +1032,54 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
 
     def rollup(n):
         n["es_hoja"] = not n["hijos"]
+        # coste de operacion: solo nodos FABRICADOS (ramas).
         # "tiempo" es min/PIEZA; "tiempo_op" son los minutos que consume esta
-        # linea (min/pieza x cantidad usada), que es lo que se cobra a 17 €/h.
+        # linea (min/pieza x cantidad usada), que es lo que se cobra a coste_hora.
         if n["es_hoja"]:
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None and not n.get("tiempo_medio"):
-            # tiempo TEORICO (mano de obra imputada en el ERP). Solo llega aqui
+            # tiempo TEÓRICO (mano de obra imputada en el ERP). Solo llega aquí
             # si no hay media de bonos utilizable: la media manda (ver TiempoOp).
-            # Es una declaracion explicita de que la pieza lleva trabajo, asi
-            # que manda incluso sobre la casilla de operacion. Caso limite: una
-            # pieza "sin operacion" CON media y CON teorico se queda a 0 EUR,
-            # porque la casilla anula la media y el teorico no llega a verse.
-            # Comprobado el 28/09/2026: no hay ninguna.
+            # Es una declaración explícita de que la pieza lleva trabajo, así
+            # que manda incluso sobre la casilla. Caso límite: una pieza "sin
+            # operación" CON media y CON teórico se queda a 0 €, porque la
+            # casilla anula la media y el teórico no llega a verse. Comprobado
+            # el 28/09/2026: no hay ninguna.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
-            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
+            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * por_min, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
         elif n.get("sin_operacion"):
-            # su fase no declara operacion: 0 EUR de mano de obra es CORRECTO,
-            # no es un dato que falte -> no se avisa como "sin tiempo".
-            # MANDA SOBRE LA MEDIA DE PARTES: ver el comentario largo en app.py
-            # (10902103 ANGULO DER. salia a 0,27 min y su espejo a "sin operacion").
+            # su fase no declara operación ("Sin operación"): 0 € de mano de obra
+            # es CORRECTO, no es un dato que falte -> no se avisa.
+            #
+            # MANDA SOBRE LA MEDIA DE PARTES. Hay 3 piezas declaradas sin operación
+            # que aun así tienen partes fichados (10902103, 23101014, 60104182), y
+            # antes ese tiempo se colaba: el ANGULO DER. salía a 0,27 min mientras
+            # su espejo el ANGULO IZQ., declarado igual pero sin partes, salía "sin
+            # operación". Dos piezas idénticas con distinto coste según si alguien
+            # llegó a fichar. La casilla del ERP es el criterio (ver c012ed1).
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         elif n.get("tiempo") is not None:
-            # media de los bonos (fuente preferente) de una pieza que si
-            # declara operacion. Lleva el montaje dentro.
+            # media de los bonos, para las piezas que sí declaran operación.
+            # Es la FUENTE PREFERENTE: la media REAL de lo que se tardó, con el
+            # montaje dentro, marcada como "medio" en la tabla. El teórico
+            # (rama de arriba) solo se usa cuando no hay media.
             n["tiempo_op"] = round(n["tiempo"] * (n["cant"] or 0), 4)
-            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * RATE_OP, 4)
+            n["coste_op"] = round(n["tiempo"] * (n["cant"] or 0) * por_min, 4)
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = n["tiempo"]
         elif n.get("servicio") is not None or n.get("precio") is not None:
-            # TRABAJO EXTERNO (lacado, zincado, remachado...): tiene escandallo Y
-            # ADEMAS se compra. Lo hace un tercero fuera de GYC, asi que 0 min de
-            # mano de obra propia es CORRECTO, no un dato que falte (ver mismo
-            # cambio y comentario largo en app.py).
+            # TRABAJO EXTERNO (lacado, zincado, remachado...): el nodo tiene
+            # escandallo Y ADEMÁS se compra (ver coste_propio/SQL_SERVICIO_EXTERNO
+            # para la raíz, o la rama "c" de EsValorable para un hijo). Ese trabajo
+            # lo hace un tercero fuera de GYC, así que 0 min de mano de obra propia
+            # es CORRECTO, no un dato que falte -> no se avisa como "sin tiempo"
+            # (18103604 BASE...LACADA avisaba en falso al buscarlo directamente).
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 0; n["tiempo_efectivo"] = None
         else:
+            # fabricado pero sin ningún tiempo con el que costear
             n["coste_op"] = 0.0; n["tiempo_op"] = 0.0
             n["sin_tiempo"] = 1; n["tiempo_efectivo"] = None
         mat = n["coste"] or 0.0
@@ -1002,6 +1098,92 @@ def construir_arbol(df, codigo, nombre, tiempo_raiz=None, sin_op_raiz=0,
 
     rollup(root)
     return root
+
+
+def avisos_arbol(arbol):
+    """Los mismos huecos que el panel de avisos de la interfaz, recorriendo el
+    árbol con su mismo criterio (ver el bloque flat() de templates/index.html).
+
+    Se recorre el árbol y no el DataFrame a propósito: el lote tenía sus propios
+    filtros y se desviaba de lo que se ve en pantalla. Los dos casos que lo
+    delataron: una pieza FABRICADA sin precio de compra no es un hueco (su coste
+    sube de sus componentes) y se contaba, y una compra directa —cuyo despiece es
+    una sola fila autorreferencial— se quedaba fuera del filtro de hojas y no se
+    miraba nunca, saliendo Completo con 0 €.
+
+    Criterio por nodo, en este orden:
+      - tiene hijos  -> es fabricada: solo puede faltarle el tiempo de operación
+      - de_conjunto  -> no es un hueco: su coste entra por el conjunto
+      - sin_escandallo -> pieza fabricada sin fase activa con la que costearla
+      - precio nulo  -> hueco de coste real; es "sin tipo" si además no tiene tipo
+    """
+    huecos = {"Sin escandallo activo": {}, "Sin tipo de aprovisionamiento": {},
+              "Sin precio de compra": {}, "Sin tiempo de operación": {}}
+
+    def visita(n):
+        if n["hijos"]:
+            if n.get("sin_tiempo"):
+                huecos["Sin tiempo de operación"].setdefault(n["id"], n)
+            for h in n["hijos"]:
+                visita(h)
+        # Una pieza de conjunto NO es un hueco: el material entra una sola vez al
+        # explotar el conjunto, y las demás piezas que salen de esa misma chapa
+        # llegan sin coste propio a propósito. El 11401042 lo enseña: el CONJUNTO
+        # PONEDERO 2 HUECOS agrupa techo, barreta y piso; el piso arrastra la
+        # chapa (3,79 €) y techo y barreta se avisaban como "sin escandallo"
+        # cuando su coste ya estaba contado. Esta rama va ANTES de la cadena
+        # porque si solo se quitara de "sin escandallo" caería en "precio nulo"
+        # y el falso aviso reaparecería como "Sin coste", que es peor.
+        elif n.get("de_conjunto"):
+            pass
+        elif n.get("sin_escandallo"):
+            huecos["Sin escandallo activo"].setdefault(n["id"], n)
+        elif n.get("precio") is None:
+            motivo = ("Sin precio de compra" if n.get("tipo")
+                      else "Sin tipo de aprovisionamiento")
+            huecos[motivo].setdefault(n["id"], n)
+
+    # la raíz solo se examina cuando ES la hoja (compra directa), igual que la
+    # interfaz, que arranca en arbol.hijos y cae a [arbol] si no tiene ninguno.
+    for n in (arbol["hijos"] or [arbol]):
+        visita(n)
+    return {k: list(v.values()) for k, v in huecos.items()}
+
+
+def lineas_coste(arbol):
+    """El coste del articulo partido por pieza: una fila por pieza que aporta
+    algo (material propio u operacion), con lo de todas las ramas en que
+    aparece sumado. Sumando coste_material y coste_operacion de todas las filas
+    sale exactamente el coste_mat y el coste_op_total del arbol.
+
+    Es lo que se guarda para el historico (que pieza explica una subida), para
+    saber en que articulos se usa cada pieza y para simular subidas de precio
+    sin volver al ERP. "cantidad" es por unidad del articulo, ya multiplicada
+    en cascada; "precio" es el de compra tal cual lo da el ERP (el coste lleva
+    ademas el descuento y el paso de gr a kg).
+    """
+    piezas = {}
+
+    def visita(n):
+        mat, op = n["coste"] or 0.0, n["coste_op"] or 0.0
+        if mat or op:
+            p = piezas.setdefault(n["id"], {
+                "idpieza": n["id"], "descripcion": n["nombre"], "tipo": n.get("tipo"),
+                "unidad": n.get("unidad"), "precio": n.get("precio"),
+                "fuente": n.get("fuente"), "cantidad": 0.0, "coste_material": 0.0,
+                "tiempo_min": 0.0, "coste_operacion": 0.0})
+            p["cantidad"] += n["cant"] or 0.0
+            p["coste_material"] += mat
+            p["tiempo_min"] += n["tiempo_op"] or 0.0
+            p["coste_operacion"] += op
+        for h in n["hijos"]:
+            visita(h)
+
+    visita(arbol)
+    for p in piezas.values():
+        for k in ("cantidad", "coste_material", "tiempo_min", "coste_operacion"):
+            p[k] = round(p[k], 6)
+    return sorted(piezas.values(), key=lambda p: p["idpieza"])
 
 
 def aplanar_arbol(arbol):
@@ -1138,11 +1320,12 @@ def exportar_excel(df: pd.DataFrame, codigo: str, nombre: str, destino) -> None:
     resumen = pd.DataFrame({
         "Concepto": ["Artículo", "Nombre", "Líneas", "Niveles",
                      "Coste MATERIA PRIMA (€)", "Coste MERCADERÍA (€)", "Coste otras compras (€)",
-                     "COSTE MATERIAL (€)", "TIEMPO TOTAL (min)", "COSTE OPERACIÓN (€)",
-                     "COSTE TOTAL (€)", "Comprables sin precio"],
+                     "COSTE MATERIAL (€)", "TIEMPO TOTAL (min)", "Coste hora operario (€/h)",
+                     "COSTE OPERACIÓN (€)", "COSTE TOTAL (€)", "Comprables sin precio"],
         "Valor": [codigo, nombre, len(df), int(df["Nivel"].max()),
                   coste_mp, coste_merc, coste_otros,
-                  coste_mat, tiempo_tot, coste_op, coste_tot, int(df["SinPrecio"].sum())],
+                  coste_mat, tiempo_tot, arbol["coste_hora"], coste_op, coste_tot,
+                  int(df["SinPrecio"].sum())],
     })
 
     with pd.ExcelWriter(destino, engine="openpyxl") as xls:

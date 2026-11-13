@@ -115,7 +115,9 @@ segunda comprobación además del hook local.
 | `app.py` | Interfaz web Flask (buscador + despiece + descarga Excel) |
 | `templates/index.html` | Frontend de la interfaz |
 | `db.py` | Conexión SQLAlchemy al ERP (solo lectura) |
-| `desglose.py` | Búsqueda de artículos + CTE recursivo + exportación a Excel |
+| `desglose.py` | Búsqueda de artículos + CTE recursivo + cálculo del coste (`construir_arbol`, `avisos_arbol`) + exportación a Excel |
+| `web_config.py` | Página `/configuracion`: el coste/hora de operario (leído del ERP, `Empleados_Categorias`) |
+| `web_analisis.py` | Páginas `/evolucion` (cómo cambia el coste y qué pieza lo explica) y `/piezas` (dónde se usa cada pieza y simulador de precios). Leen el detalle por pieza que guarda la pasada (`sql/07_detalle_coste.sql`) |
 | `.env` | Credenciales (no se versiona) |
 | `salidas/` | Excels generados (no se versiona) |
 

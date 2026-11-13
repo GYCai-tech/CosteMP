@@ -15,9 +15,8 @@ import random
 from sqlalchemy import text
 
 from db_pg import get_pg_engine
-from desglose import (coste_propio, desglose, nombre_articulo, sin_operacion,
-                      tiempo_operacion)
-from app import construir_arbol
+from desglose import (construir_arbol, coste_propio, desglose, nombre_articulo,
+                      sin_operacion, tiempo_operacion)
 
 TOL = 0.0001
 
